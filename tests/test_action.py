@@ -121,6 +121,13 @@ def test_release_requires_provenance_and_a_protected_environment():
     assert 'git push --force origin "refs/tags/$MAJOR_TAG"' in workflow
 
 
+def test_ci_cache_tracks_the_actual_dependency_manifest():
+    workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "cache-dependency-path: requirements-dev.txt" in workflow
+
+
 def test_documentation_recommends_verifiable_usage():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     prose = " ".join(readme.split())
