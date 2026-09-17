@@ -1,0 +1,437 @@
+{
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "RunContext": {
+        "description": "Pipeline run context that produced a scan result (M019 S01).\n\nCarries the commit/ref/CI run a scan was generated from, so a finding is\nattributable to the exact point in history that produced it. All fields\nare non-secret metadata already visible in the customer's CI; none is\nmatched scanner content.",
+        "properties": {
+          "ci_run_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CI run/pipeline id, for retry correlation",
+            "title": "Ci Run Id"
+          },
+          "ci_run_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Monotonic workflow/pipeline sequence used to reject delayed older runs",
+            "title": "Ci Run Sequence"
+          },
+          "commit_sha": {
+            "description": "Git commit the scan ran against",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Commit Sha",
+            "type": "string"
+          },
+          "delivery_mode": {
+            "default": "api",
+            "description": "How this report reached the platform",
+            "enum": [
+              "github_ci",
+              "gitlab_ci",
+              "api"
+            ],
+            "title": "Delivery Mode",
+            "type": "string"
+          },
+          "provider_base_hint": {
+            "anyOf": [
+              {
+                "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Untrusted provider base hint for bounded local verification",
+            "title": "Provider Base Hint"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Git ref (branch) the scan ran against",
+            "title": "Ref"
+          },
+          "trigger_kind": {
+            "default": "unknown",
+            "description": "Provider-normalized scan trigger",
+            "enum": [
+              "push",
+              "pull_request",
+              "manual",
+              "schedule",
+              "unknown"
+            ],
+            "title": "Trigger Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit_sha"
+        ],
+        "title": "RunContext",
+        "type": "object"
+      },
+      "ScanIngestRequest": {
+        "description": "Scanner output. The credential is not in here.\n\n``upload_token`` used to be required in the body while the generated\nworkflow sent its token as a header \u2014 a contradiction that rejected every\ngenerated workflow before the body was parsed. M020 S03 settles on the\nAuthorization header as the one place a credential lives, so the body is\nscanner output and nothing else.\n\nThe finding-store fields below are **optional**. M020's shipped GitLab\ntemplate posts findings and nothing more, and it is already in customers'\nrepositories \u2014 requiring these would reject every scan from it the moment\nthis merged. When they are absent the scan still ingests and falls back to\nthe aggregate result; when present it lands in the finding store with full\nlifecycle. Making them required is a change to a published contract and\nneeds the templates reissued first.",
+        "properties": {
+          "findings": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Findings"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-job idempotency key",
+            "title": "Idempotency Key"
+          },
+          "issues": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issues"
+          },
+          "repo_key": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque repository ingest key",
+            "title": "Repo Key"
+          },
+          "results": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Results"
+          },
+          "run_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pipeline run context (commit, ref, ci run)"
+          },
+          "sarif": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sarif"
+          },
+          "vulnerabilities": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vulnerabilities"
+          }
+        },
+        "title": "ScanIngestRequest",
+        "type": "object"
+      },
+      "ScanIngestResponse": {
+        "description": "Canonical check state plus the verdict for this submitted payload.",
+        "properties": {
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "entitlement_status": {
+            "default": "pending",
+            "title": "Entitlement Status",
+            "type": "string"
+          },
+          "ingest_result": {
+            "additionalProperties": true,
+            "title": "Ingest Result",
+            "type": "object"
+          },
+          "project_key": {
+            "title": "Project Key",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "source_group_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Group Url"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "status": {
+            "default": "pending",
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workflow_status": {
+            "default": "none",
+            "title": "Workflow Status",
+            "type": "string"
+          },
+          "workflow_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Token"
+          }
+        },
+        "required": [
+          "check_id",
+          "customer_id",
+          "project_key",
+          "created_at",
+          "updated_at",
+          "ingest_result"
+        ],
+        "title": "ScanIngestResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "in": "header",
+        "name": "X-API-Key",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "Commercial platform API for paid security checks, entitlement, and reports.",
+    "title": "SourceBastion platform API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/checks/{check_id}/ingest": {
+      "post": {
+        "description": "Accept scanner output from a customer's CI runner.\n\nAuthenticated by a project-scoped key in ``Authorization: Bearer``. The\nplatform's global admin key is deliberately *not* accepted: it guards every\nadmin route, so an endpoint taking either credential would have the one that\nmust never leave the platform as its security boundary.\n\nEnds at \"authentic, correctly scoped, carries context\" \u2014 what becomes of the\npayload is M019's boundary.",
+        "operationId": "ingest_scan_result_checks__check_id__ingest_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "check_id",
+            "required": true,
+            "schema": {
+              "title": "Check Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanIngestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Scan Result"
+      }
+    }
+  }
+}

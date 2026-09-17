@@ -1,0 +1,6 @@
+# Release-path changes require review from a current repository administrator.
+/.github/workflows/ @jfelten @jenfelten
+/.github/dependabot.yml @jfelten @jenfelten
+/action.yml @jfelten @jenfelten
+/scripts/upload.py @jfelten @jenfelten
+/openapi.json @jfelten @jenfelten

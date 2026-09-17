@@ -1,0 +1,213 @@
+name: ez-appsec scan
+description: >-
+  Scan the repository and gate the pipeline. No account, no configuration, no
+  secrets. Findings appear as annotations on the diff, as a SARIF artifact on
+  the run, and -- where code scanning is enabled -- as code-scanning alerts.
+author: ez-appsec
+
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  image:
+    description: >-
+      Scanner image reference. Digest-pinned by default; if you override it,
+      pin a digest too -- a floating security scanner is a supply-chain
+      exposure, not a convenience.
+    required: false
+    default: ghcr.io/ez-appsec/ez-appsec@sha256:89d34f68839bfc4346d92d4e5c4103c528d643af9cd45c21019524ce8d175e62
+  fail-on-severity:
+    description: >-
+      Lowest severity that fails the build: critical, high, medium, low, or
+      none. Findings the scanner left ungraded are announced but never fail
+      the gate.
+    required: false
+    default: high
+  api-key:
+    description: >-
+      Optional. Absent (the default) the scan is keyless: nothing is sent to
+      ez-appsec, provably. Present, the same scan is also reported to the
+      platform — that is the entire difference (M030 S05). Pass a secret.
+    required: false
+    default: ""
+  check-id:
+    description: >-
+      The platform check this repository reports to. Required only when
+      api-key is set; minted with the key from the Integrate-with-CI flow.
+    required: false
+    default: ""
+  repo-key:
+    description: >-
+      Optional repository identity within the check, for lifecycle and delta
+      on the platform. Ignored when api-key is absent.
+    required: false
+    default: ""
+  ingest-url:
+    description: >-
+      Platform base URL the scan is reported to, when api-key is set.
+    required: false
+    default: https://api.ez-appsec.com
+  strict-upload:
+    description: >-
+      "true" makes a failed platform upload fail the build. Default false:
+      the scan already delivered its verdict and artifacts, and a platform
+      incident must not become an outage in your pipeline.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # The scan runs in the digest-pinned published image, as the generated
+    # workflows run it -- the free tier's scanner is the paid tier's scanner
+    # (M030 spec: never worse, never different). A scan failure fails the job
+    # here, which is the fail-closed behaviour M028-D6 requires: later steps
+    # with `if: always()` still deliver whatever the scan left behind once the
+    # private output directory has been created.
+    - name: Scan the repository
+      id: scan
+      shell: bash
+      env:
+        # Inputs are data, not shell source. Keeping the expression out of the
+        # script prevents a caller-controlled quote from becoming a command.
+        EZ_APPSEC_IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        results_dir="$(mktemp -d "${RUNNER_TEMP:?}/ez-appsec-results.XXXXXX")"
+        printf 'results_dir=%s\n' "$results_dir" >> "$GITHUB_OUTPUT"
+
+        if [ "$(id -u)" -eq 0 ]; then
+          echo "::error::ez-appsec refuses to override the scanner's non-root user with root. Run the self-hosted runner as an unprivileged account."
+          exit 2
+        fi
+        if [[ ! "$EZ_APPSEC_IMAGE" =~ ^[A-Za-z0-9][^[:space:]@]*@sha256:[0-9a-f]{64}$ ]]; then
+          echo "::error::ez-appsec image must be an explicit sha256 digest reference"
+          exit 2
+        fi
+
+        docker run --rm \
+          --user "$(id -u):$(id -g)" \
+          --env HOME=/tmp \
+          --network none \
+          --volume "$GITHUB_WORKSPACE:/scan:ro" \
+          --volume "$results_dir:/out" \
+          --workdir /scan \
+          "$EZ_APPSEC_IMAGE" \
+          scan . --output /out/results.json --severity all
+
+    # SARIF next to the native report, from the same scan -- never a second
+    # scan whose verdict could disagree (M030 S01). The script is the same
+    # emitter the generated templates embed; `always()` because a scan that
+    # failed partway may still leave a report worth keeping. The output guard
+    # prevents an empty step output from being interpreted as a root path.
+    - name: Write SARIF next to the native results
+      id: sarif
+      if: always() && steps.scan.outputs.results_dir != ''
+      shell: bash
+      env:
+        EZ_APPSEC_ACTION_PATH: ${{ github.action_path }}
+        EZ_APPSEC_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
+      run: >-
+        python3 "$EZ_APPSEC_ACTION_PATH/scripts/sarif.py"
+        "$EZ_APPSEC_RESULTS_DIR/results.json"
+        "$EZ_APPSEC_RESULTS_DIR/results.sarif"
+
+    # Findings inline on the diff, free tier included (M030 S02): workflow
+    # commands, no account, no App token, no platform contact.
+    - name: Annotate findings on the diff
+      id: annotate
+      if: always() && steps.scan.outputs.results_dir != ''
+      shell: bash
+      env:
+        EZ_APPSEC_ACTION_PATH: ${{ github.action_path }}
+        EZ_APPSEC_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
+      run: >-
+        python3 "$EZ_APPSEC_ACTION_PATH/scripts/annotate.py"
+        "$EZ_APPSEC_RESULTS_DIR/results.json"
+
+    # The runner's filesystem does not outlive the job. Without this upload
+    # the free tier's deliverable is deleted with the runner.
+    - name: Upload scan output as a workflow artifact
+      if: always() && steps.scan.outputs.results_dir != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: ez-appsec-scan
+        path: |
+          ${{ steps.scan.outputs.results_dir }}/results.json
+          ${{ steps.scan.outputs.results_dir }}/results.sarif
+        if-no-files-found: warn
+        retention-days: 7
+
+    # Code-scanning upload is attempted, never required (M029-D3): there is
+    # no pre-flight for "this repository has Code Security", so it is
+    # attempt-and-explain. A failure here must not fail the build -- that
+    # would fail a customer's pipeline for a permission they may not be able
+    # to have (M029-D3, M030 spec: never fail a build for a permission they
+    # do not have). The step below names the cause.
+    - name: Upload SARIF to GitHub code scanning (optional)
+      id: codescan
+      if: always() && steps.scan.outputs.results_dir != ''
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+      with:
+        sarif_file: ${{ steps.scan.outputs.results_dir }}/results.sarif
+        category: ez-appsec
+
+    - name: Explain a code-scanning upload that did not happen
+      if: always() && steps.codescan.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::notice::ez-appsec: the code-scanning upload was not completed. The scan, its annotations and the 'ez-appsec-scan' artifact are unaffected."
+        echo "::notice::ez-appsec: the usual causes: the job's permissions do not include 'security-events: write', or code scanning is not enabled for this repository."
+        echo "::notice::ez-appsec: neither is required on the free tier -- annotations and the artifact remain available."
+
+    # Managed mode (M030 S05): the same scan, also posted to the platform.
+    # Gated on the key itself — no key, no step, no request (provable from
+    # this file and from upload.py's first guard). Non-fatal by default:
+    # a platform incident must not become an outage in every customer's
+    # pipeline; policy rejection stays fatal and is decided by upload.py.
+    - name: Report findings to ez-appsec (managed mode)
+      id: upload
+      if: inputs.api-key != ''
+      shell: bash
+      env:
+        EZ_APPSEC_API_KEY: ${{ inputs.api-key }}
+        # Read the provider's own signal, not the absent credential: a fork
+        # PR cannot reach secrets and skips the upload honestly (M027 S09).
+        EZ_APPSEC_FORK_PR: ${{ github.event.pull_request.head.repo.fork || false }}
+        EZ_APPSEC_STRICT_UPLOAD: ${{ inputs.strict-upload }}
+        # Inputs cross through env, never through `run`: expressions embedded
+        # in run are substituted before bash parses the script, and an input
+        # can carry quotes and shell metacharacters.
+        EZ_APPSEC_INGEST_URL: ${{ inputs.ingest-url }}
+        EZ_APPSEC_CHECK_ID: ${{ inputs.check-id }}
+        EZ_APPSEC_REPO_KEY: ${{ inputs.repo-key }}
+        EZ_APPSEC_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
+        COMMIT_SHA: ${{ github.sha }}
+        REF: ${{ github.ref }}
+        CI_RUN_ID: ${{ github.run_id }}
+        CI_RUN_SEQUENCE: ${{ github.run_number }}
+        DELIVERY_MODE: github_ci
+        PROVIDER_TRIGGER: ${{ github.event_name }}
+      run: >-
+        python3 "${{ github.action_path }}/scripts/upload.py"
+        "$EZ_APPSEC_RESULTS_DIR/results.json" "$EZ_APPSEC_INGEST_URL"
+        "$EZ_APPSEC_CHECK_ID" "$EZ_APPSEC_REPO_KEY"
+
+    # The gate runs last, only after a completed scan, and its exit code is
+    # the job's verdict: 1 = policy violation, 2 = unevaluable output. When
+    # the scan itself failed the job is already red with the real cause, and
+    # re-failing on a report that cannot exist would bury it.
+    - name: Enforce the policy gate
+      id: gate
+      if: always() && steps.scan.outcome == 'success'
+      shell: bash
+      env:
+        EZ_APPSEC_ACTION_PATH: ${{ github.action_path }}
+        EZ_APPSEC_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
+        EZ_APPSEC_FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+      run: >-
+        python3 "$EZ_APPSEC_ACTION_PATH/scripts/gate.py"
+        "$EZ_APPSEC_RESULTS_DIR/results.json"
+        "$EZ_APPSEC_FAIL_ON_SEVERITY"

@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing VERSION value, prefixed with v (for example v1.0.0)
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Attest and publish
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out the approved source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate the release version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "releases must be dispatched from main" >&2
+            exit 1
+          fi
+          expected="v$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$REQUESTED_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must be an exact vMAJOR.MINOR.PATCH value" >&2
+            exit 1
+          fi
+          if [ "$REQUESTED_VERSION" != "$expected" ]; then
+            echo "requested $REQUESTED_VERSION but VERSION declares $expected" >&2
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/$REQUESTED_VERSION"; then
+            echo "$REQUESTED_VERSION already exists; full-version releases are immutable" >&2
+            exit 1
+          fi
+          printf 'tag=%s\n' "$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+          printf 'major=%s\n' "${REQUESTED_VERSION%%.*}" >> "$GITHUB_OUTPUT"
+
+      - name: Build the source artifact
+        id: artifact
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          name="sourcebastion-action-${VERSION}.tar.gz"
+          path="$RUNNER_TEMP/$name"
+          git archive \
+            --format=tar.gz \
+            --prefix="sourcebastion-action-${VERSION#v}/" \
+            --output="$path" \
+            "$GITHUB_SHA"
+          (cd "$RUNNER_TEMP" && sha256sum "$name" > "$name.sha256")
+          printf 'name=%s\n' "$name" >> "$GITHUB_OUTPUT"
+          printf 'path=%s\n' "$path" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the source artifact
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.artifact.outputs.path }}
+
+      - name: Publish the immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          MAJOR_TAG: ${{ steps.version.outputs.major }}
+          ARTIFACT: ${{ steps.artifact.outputs.path }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            "$ARTIFACT" \
+            "$ARTIFACT.sha256" \
+            "$BUNDLE" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes
+
+          # Full-version release tags are immutable. The major tag is the
+          # intentionally moving compatibility pointer documented for users.
+          git tag --force "$MAJOR_TAG" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$MAJOR_TAG"
