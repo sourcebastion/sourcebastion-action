@@ -121,6 +121,33 @@ def test_release_requires_provenance_and_a_protected_environment():
     assert 'git push --force origin "refs/tags/$MAJOR_TAG"' in workflow
 
 
+def test_ci_cache_tracks_the_actual_dependency_manifest():
+    workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "cache-dependency-path: requirements-dev.txt" in workflow
+
+
+def test_security_ci_covers_dependency_changes_and_source_analysis():
+    workflow = (ROOT / ".github" / "workflows" / "security.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "pull_request:" in workflow
+    assert "branches: [main]" in workflow
+    assert "schedule:" in workflow
+    assert "name: Dependency review" in workflow
+    assert re.search(
+        r"uses: actions/dependency-review-action@[0-9a-f]{40} # v5\.0\.0",
+        workflow,
+    )
+    assert "name: CodeQL (python)" in workflow
+    assert "security-events: write" in workflow
+    assert "languages: python" in workflow
+    assert len(
+        re.findall(r"uses: github/codeql-action/(?:init|analyze)@[0-9a-f]{40} # v4", workflow)
+    ) == 2
+
+
 def test_documentation_recommends_verifiable_usage():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     prose = " ".join(readme.split())
