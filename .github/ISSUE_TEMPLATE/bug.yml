@@ -1,0 +1,57 @@
+name: Bug report
+description: Report unexpected behavior in the SourceBastion GitHub Action
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve SourceBastion. Automation may acknowledge and
+        assess this report, but any proposed fix remains subject to human review.
+        Do not include secrets or vulnerability details in a public issue.
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Usage mode
+      options:
+        - Keyless
+        - Managed
+        - Both or unknown
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Action version
+      description: Full tag or commit SHA used by the workflow
+      placeholder: v1 or 40-character commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe the actual and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest safe workflow excerpt and reproduction steps.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Remove tokens, repository secrets, and sensitive source before posting.
+      render: shell
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Public-report safety
+      options:
+        - label: I removed secrets and this is not a private vulnerability report.
+          required: true

@@ -18,6 +18,17 @@ it (the default) there is nothing to configure and nothing leaves your runner:
 findings are not sent to ez-appsec, and GitHub receives only the annotations
 and optional run/code-scanning artifacts described above.
 
+> [!NOTE]
+> **Actively maintained with automation and human review.** Automated dependency
+> updates and hosted security CI keep this public Action current; releases and
+> issue-driven changes remain human-governed. SourceBastion dependency updates
+> receive at least a two-day soak before integration unless a maintainer confirms
+> a zero-day emergency. Found a problem or have an idea? Please open a
+> [bug report](https://github.com/sourcebastion/sourcebastion-action/issues/new?template=bug.yml)
+> or [feature request](https://github.com/sourcebastion/sourcebastion-action/issues/new?template=feature.yml).
+> Report vulnerabilities privately through the
+> [Security tab](https://github.com/sourcebastion/sourcebastion-action/security/advisories/new).
+
 ## Usage
 
 ```yaml
