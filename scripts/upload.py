@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The upload client (M030 S05) — one scan, an optional second destination.
+"""The managed-mode client (M030 S05, M043) — upload or verify the App gate.
 
 The same scan runs keyless or managed; the key decides whether the result is
 also posted to the platform, and nothing else changes — not the scanner, not
@@ -21,8 +21,8 @@ cannot drift):
 
 Behaviour the free tier depends on:
 
-* **No key means no network call** — the guard is the first thing that runs,
-  provably before any request is built. Keyless scans never touch us.
+* **No key means no network call** — the guard runs before any request is
+  built. Keyless legacy scans never touch us; hosted-v2 fails closed.
 * **A failed upload does not fail the build by default** (S05's own risk: a
   platform incident must not become an outage in every customer's pipeline).
   Set ``SOURCEBASTION_STRICT_UPLOAD=true`` to make it fatal.
@@ -30,8 +30,11 @@ Behaviour the free tier depends on:
   refused it; that is a gate verdict, not a delivery problem (M028-D6).
 * **Errors name the cause and the action** (M025 S03): an expired key, a
   revoked project and an unreachable platform are three different sentences.
-* **A fork pull request cannot reach secrets**, so the key is absent and the
-  run is keyless with an honest message — never a hard error (M027 S09).
+* **A fork pull request cannot reach secrets**, so legacy mode is keyless with
+  an honest message; hosted-v2 fails closed rather than claiming a pass.
+* **Hosted-v2 reads only the GitHub App's server-owned decision** for the exact
+  PR/branch head. It does not upload a CI report that could supersede the App
+  findings run, and never treats the CI payload as policy evidence.
 
 Exit codes: 0 = sent and accepted, or deliberately not sent; 1 = policy
 rejected, configuration error, or (strict mode) delivery failed; 2 = usage.
@@ -41,7 +44,9 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -155,17 +160,98 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    if hosted_v2 and not all((
-        repo_key,
-        os.environ.get("COMMIT_SHA"),
-        os.environ.get("REF"),
-        os.environ.get("CI_RUN_ID"),
-    )):
+    gate_commit = os.environ.get("SOURCEBASTION_GATE_COMMIT_SHA") or os.environ.get("COMMIT_SHA") or ""
+    gate_ref = os.environ.get("SOURCEBASTION_GATE_REF") or os.environ.get("REF") or ""
+    if hosted_v2 and not (
+        repo_key and re.fullmatch(r"[0-9a-f]{40}", gate_commit)
+        and (gate_ref.startswith("refs/heads/") or re.fullmatch(r"refs/pull/[1-9][0-9]*/head", gate_ref))
+    ):
         print(
-            "SourceBastion: hosted-v2 requires repository, commit, ref, and CI run identity",
+            "SourceBastion: hosted-v2 requires an exact repository and GitHub head identity",
             file=sys.stderr,
         )
         return 1
+
+    if hosted_v2:
+        # The uploaded CI report cannot attest that every configured scanner
+        # ran, or that the account's mandatory floor was applied. Only the
+        # GitHub App execution can make that claim. Keep the CI report local
+        # and read its independently persisted, exact-head decision instead.
+        query = urllib.parse.urlencode({
+            "repo_key": repo_key, "ref": gate_ref, "commit_sha": gate_commit,
+        })
+        url = f"{base_url}/checks/{check_id}/policy-decision?{query}"
+        for attempt in range(30):
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "User-Agent": f"sourcebastion-action/{VERSION}",
+                },
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    if response.status == 202:
+                        if attempt < 29:
+                            time.sleep(10)
+                            continue
+                        print(
+                            "SourceBastion: GitHub App policy decision did not complete within five minutes",
+                            file=sys.stderr,
+                        )
+                        return 1
+                    result = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if exc.code == 409:
+                    print("SourceBastion: hosted policy decision is missing or stale", file=sys.stderr)
+                    return 1
+                return _fail_delivery(
+                    NAMED_ERRORS.get(exc.code, f"the platform returned HTTP {exc.code}"),
+                    True,
+                )
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                return _fail_delivery(
+                    f"the platform could not be reached at {base_url}: {exc}", True
+                )
+            expected = {
+                "policy_profile": "scan-gate.v2",
+                "policy_ref": gate_ref,
+                "policy_repo_key": repo_key,
+                "policy_commit_sha": gate_commit,
+            }
+            if (
+                not isinstance(result, dict)
+                or any(result.get(name) != value for name, value in expected.items())
+                or not isinstance(result.get("policy_findings_run_id"), int)
+                or isinstance(result.get("policy_findings_run_id"), bool)
+                or result["policy_findings_run_id"] <= 0
+                or not all(
+                    isinstance(result.get(name), int)
+                    and not isinstance(result.get(name), bool)
+                    and result[name] >= 0
+                    for name in ("policy_project_version", "policy_organization_version")
+                )
+                or any(
+                    not isinstance(result.get(name), str)
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", result[name]) is None
+                    for name in ("policy_snapshot_digest", "policy_bundle_digest")
+                )
+                or result.get("policy_status") not in {"passed", "failed", "error"}
+            ):
+                print(
+                    "SourceBastion: platform did not return a complete current-commit scan-gate.v2 decision",
+                    file=sys.stderr,
+                )
+                return 1
+            if result["policy_status"] == "passed":
+                print("SourceBastion: GitHub App policy gate passed")
+                return 0
+            print(
+                f"SourceBastion: GitHub App policy gate {result['policy_status']}",
+                file=sys.stderr,
+            )
+            return 1
 
     try:
         with open(source, encoding="utf-8") as handle:
@@ -227,7 +313,7 @@ def main() -> int:
             f"the platform could not be reached at {base_url}: {exc}", strict
         )
 
-    # The verdict: the platform saw the scan and answered. A rejection here is
+    # Legacy verdict: the platform saw the scan and answered. A rejection here is
     # a gate outcome and always fatal (M028-D6) — unlike the delivery
     # failures above, which merely lost the copy.
     result = document.get("ingest_result") if isinstance(document, dict) else None
@@ -235,34 +321,6 @@ def main() -> int:
         result = document.get("result")
     policy_status = result.get("policy_status") if isinstance(result, dict) else None
     reason = result.get("reason") if isinstance(result, dict) else None
-    if hosted_v2:
-        expected = {
-            "policy_profile": "scan-gate.v2",
-            "policy_ref": os.environ["REF"],
-            "policy_repo_key": repo_key,
-            "policy_commit_sha": os.environ["COMMIT_SHA"],
-        }
-        if (
-            not isinstance(result, dict)
-            or any(result.get(name) != value for name, value in expected.items())
-            or not isinstance(result.get("policy_findings_run_id"), int)
-            or isinstance(result.get("policy_findings_run_id"), bool)
-            or result["policy_findings_run_id"] <= 0
-            or not isinstance(result.get("policy_snapshot_digest"), str)
-            or re.fullmatch(
-                r"sha256:[0-9a-f]{64}", result["policy_snapshot_digest"]
-            ) is None
-            or not isinstance(result.get("policy_bundle_digest"), str)
-            or re.fullmatch(
-                r"sha256:[0-9a-f]{64}", result["policy_bundle_digest"]
-            ) is None
-            or policy_status not in {"passed", "failed", "error"}
-        ):
-            print(
-                "SourceBastion: platform did not return a complete current-commit scan-gate.v2 decision",
-                file=sys.stderr,
-            )
-            return 1
     if policy_status == "passed":
         print("SourceBastion: uploaded; platform policy passed")
         return 0

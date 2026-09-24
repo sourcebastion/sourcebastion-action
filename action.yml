@@ -27,7 +27,7 @@ inputs:
   policy-gate-mode:
     description: >-
       legacy keeps the existing local severity gate. hosted-v2 requires a
-      complete, current-commit scan-gate.v2 verdict from SourceBastion and
+      complete, current-head scan-gate.v2 verdict from the SourceBastion GitHub App and
       fails closed on missing credentials, fork secrets, or platform errors.
     required: false
     default: legacy
@@ -192,12 +192,14 @@ runs:
         echo "::notice::SourceBastion: the usual causes: the job's permissions do not include 'security-events: write', or code scanning is not enabled for this repository."
         echo "::notice::SourceBastion: neither is required on the free tier -- annotations and the artifact remain available."
 
-    # Managed mode (M030 S05): the same scan, also posted to the platform.
+    # Managed mode (M030 S05): upload in legacy mode; hosted-v2 reads the
+    # independently trusted GitHub App policy decision without uploading its
+    # CI report into the App's findings snapshot.
     # Gated on the key itself — no key, no step, no request (provable from
     # this file and from upload.py's first guard). Non-fatal by default:
     # a platform incident must not become an outage in every customer's
     # pipeline; policy rejection stays fatal and is decided by upload.py.
-    - name: Report findings to SourceBastion (managed mode)
+    - name: Report findings or verify SourceBastion gate
       id: upload
       if: inputs.api-key != '' || inputs.policy-gate-mode == 'hosted-v2'
       shell: bash
@@ -217,6 +219,10 @@ runs:
         SOURCEBASTION_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
         COMMIT_SHA: ${{ github.sha }}
         REF: ${{ github.ref }}
+        # pull_request workflows normally run on a synthetic merge ref. The
+        # GitHub App independently gates the immutable PR head instead.
+        SOURCEBASTION_GATE_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        SOURCEBASTION_GATE_REF: ${{ github.event.pull_request.number && format('refs/pull/{0}/head', github.event.pull_request.number) || github.ref }}
         CI_RUN_ID: ${{ github.run_id }}
         CI_RUN_SEQUENCE: ${{ github.run_number }}
         DELIVERY_MODE: github_ci

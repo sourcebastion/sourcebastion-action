@@ -87,7 +87,7 @@ optional upload fails, everything the free tier promises still happens.
 | --- | --- | --- |
 | `image` | digest-pinned `ghcr.io/sourcebastion/sourcebastion-scanner@sha256:…` | Override only with another digest-pinned reference. The Action rejects tags and other floating references. |
 | `fail-on-severity` | `high` | Lowest severity that fails the build: `critical`, `high`, `medium`, `low`, `none`. |
-| `policy-gate-mode` | `legacy` | `legacy` uses the local severity gate. `hosted-v2` requires a current-commit, versioned SourceBastion policy decision and never falls back to the legacy gate. |
+| `policy-gate-mode` | `legacy` | `legacy` uses the local severity gate. `hosted-v2` reads the GitHub App's current-PR-head, versioned SourceBastion decision and never falls back to the legacy gate. |
 | `api-key` | *(empty — keyless)* | Set it and the same scan is also reported to the platform. Pass a secret: `api-key: ${{ secrets.SOURCEBASTION_API_KEY }}`. |
 | `check-id` | *(empty)* | Required with `api-key`; minted with the key from the Integrate-with-CI flow. |
 | `repo-key` | *(empty)* | Repository identity within the check, for lifecycle and delta on the platform. |
@@ -102,7 +102,7 @@ optional upload fails, everything the free tier promises still happens.
 | job fails, gate step, exit 1 | Policy violation: findings at or above `fail-on-severity` |
 | job fails, gate step, exit 2 | Output could not be evaluated (report missing, unreadable, structurally invalid, or an invalid threshold) — fail closed |
 | job fails, upload step | Managed mode only: the platform rejected the scan (always fatal), or `strict-upload: true` and the upload failed |
-| job fails, hosted-v2 upload step | Required credentials, complete current-commit v2 decision, or platform delivery was unavailable; no legacy fallback |
+| job fails, hosted-v2 verification step | Required credentials, complete current-head v2 decision, or platform delivery was unavailable; no legacy fallback |
 | job succeeds | Policy passed |
 
 A failed *optional delivery* (code-scanning upload, or a platform upload
@@ -138,12 +138,13 @@ own models — it describes the ingest endpoint and nothing else.
 ### Hosted v2 opt-in is not yet a production gate
 
 `policy-gate-mode: hosted-v2` disables the local threshold fallback and
-requires the upload response to carry a `scan-gate.v2` decision bound to the
-same repository, ref, commit, and findings run, with snapshot and bundle
-digests. A missing key, fork-secret loss, failed upload, stale commit, or
-legacy response fails the job. The current platform ingest API still returns
-a legacy response, so this mode intentionally fails until the M043 server
-integration and cross-consumer proofs are released. Keep the default
+reads the platform's GitHub App-owned `scan-gate.v2` decision for the exact
+repository and PR head (or pushed branch head). It waits up to five minutes
+for the App scan, then fails closed. It does not upload the Action's separate
+CI report into the App's authoritative findings snapshot. A missing key,
+fork-secret loss, absent App scan, stale policy, or incomplete decision fails
+the job. This mode needs the M043 platform endpoint and GitHub App enforcement
+to be deployed and verified together. Keep the default
 `legacy` mode for existing workflows; do not make `hosted-v2` a required
 check yet.
 

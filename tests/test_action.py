@@ -47,7 +47,7 @@ def test_third_party_actions_are_sha_pinned_and_labelled():
 
 
 def test_managed_upload_reads_the_scan_output():
-    step = BY_NAME["Report findings to SourceBastion (managed mode)"]
+    step = BY_NAME["Report findings or verify SourceBastion gate"]
     assert step["env"]["SOURCEBASTION_RESULTS_DIR"] == (
         "${{ steps.scan.outputs.results_dir }}"
     )
@@ -55,14 +55,16 @@ def test_managed_upload_reads_the_scan_output():
     assert "scan-results/results.json" not in step["run"]
 
 
-def test_hosted_v2_never_skips_the_required_upload_or_falls_back_to_legacy():
-    upload = BY_NAME["Report findings to SourceBastion (managed mode)"]
+def test_hosted_v2_never_skips_verification_or_falls_back_to_legacy():
+    upload = BY_NAME["Report findings or verify SourceBastion gate"]
     gate = BY_NAME["Enforce the policy gate"]
     assert "inputs.policy-gate-mode == 'hosted-v2'" in upload["if"]
     assert upload["env"]["SOURCEBASTION_POLICY_GATE_MODE"] == (
         "${{ inputs.policy-gate-mode }}"
     )
     assert "inputs.policy-gate-mode == 'legacy'" in gate["if"]
+    assert "pull_request.head.sha || github.sha" in upload["env"]["SOURCEBASTION_GATE_COMMIT_SHA"]
+    assert "refs/pull/{0}/head" in upload["env"]["SOURCEBASTION_GATE_REF"]
     assert ACTION["inputs"]["policy-gate-mode"]["default"] == "legacy"
 
 

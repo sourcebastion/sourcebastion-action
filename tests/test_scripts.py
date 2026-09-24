@@ -160,11 +160,12 @@ def test_hosted_v2_requires_current_commit_versioned_decision(tmp_path):
     source = tmp_path / "results.json"
     write_report(source, [])
     responses = []
+    requests = []
 
     class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):  # noqa: N802 - HTTP server callback
-            self.rfile.read(int(self.headers["Content-Length"]))
-            payload = json.dumps({"ingest_result": responses.pop(0)}).encode("utf-8")
+        def do_GET(self):  # noqa: N802 - HTTP server callback
+            requests.append((self.path, self.headers["Authorization"]))
+            payload = json.dumps(responses.pop(0)).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -182,18 +183,22 @@ def test_hosted_v2_requires_current_commit_versioned_decision(tmp_path):
             os.environ,
             SOURCEBASTION_API_KEY="test-key",
             SOURCEBASTION_POLICY_GATE_MODE="hosted-v2",
-            COMMIT_SHA="a" * 40,
-            REF="refs/pull/7/head",
-            CI_RUN_ID="100",
+            COMMIT_SHA="f" * 40,
+            REF="refs/pull/7/merge",
+            SOURCEBASTION_GATE_COMMIT_SHA="a" * 40,
+            SOURCEBASTION_GATE_REF="refs/pull/7/head",
         )
         env.pop("SOURCEBASTION_FORK_PR", None)
         valid = {
             "policy_profile": "scan-gate.v2", "policy_status": "passed",
-            "policy_ref": env["REF"], "policy_repo_key": "repo-key",
-            "policy_commit_sha": env["COMMIT_SHA"],
+            "policy_ref": env["SOURCEBASTION_GATE_REF"],
+            "policy_repo_key": "repo-key",
+            "policy_commit_sha": env["SOURCEBASTION_GATE_COMMIT_SHA"],
             "policy_findings_run_id": 1,
             "policy_snapshot_digest": "sha256:" + "b" * 64,
             "policy_bundle_digest": "sha256:" + "c" * 64,
+            "policy_project_version": 1,
+            "policy_organization_version": 0,
         }
         responses.extend([
             {"policy_status": "passed"},
@@ -217,6 +222,11 @@ def test_hosted_v2_requires_current_commit_versioned_decision(tmp_path):
     assert [outcome.returncode for outcome in outcomes] == [1, 1, 1, 0, 1]
     assert "scan-gate.v2 decision" in outcomes[0].stderr
     assert "scan-gate.v2 decision" in outcomes[1].stderr
+    assert len(requests) == 5
+    assert all(path.startswith("/checks/check-id/policy-decision?") for path, _ in requests)
+    assert all("ref=refs%2Fpull%2F7%2Fhead" in path for path, _ in requests)
+    assert all("commit_sha=" + "a" * 40 in path for path, _ in requests)
+    assert all(auth == "Bearer test-key" for _, auth in requests)
 
 
 def test_managed_upload_requires_a_check_id_before_network(tmp_path):
