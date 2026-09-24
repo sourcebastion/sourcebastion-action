@@ -28,6 +28,19 @@ window will be announced in release notes and in this document before the old
 version is removed. No blanket response-time or support-duration commitment is
 made here.
 
+## M043 hosted-v2 opt-in (not yet available from ingest)
+
+The Action's optional `hosted-v2` mode will accept a green response only when
+`ingest_result` contains a server-owned `scan-gate.v2` decision with
+`policy_status`, `policy_repo_key`, `policy_ref`, `policy_commit_sha`,
+`policy_findings_run_id`, `policy_snapshot_digest`, and
+`policy_bundle_digest`. Repository, ref, and commit must match the CI run that
+uploaded the report. `failed`, `error`, missing fields, stale identity, and
+transport failures are all non-green. This is an additive response shape,
+not a claim that the current v1 ingest service can yet produce the decision.
+Do not enable `hosted-v2` on a required check before that server integration
+and conformance proof are released.
+
 ## Finding-data privacy
 
 The platform may persist only these scanner-controlled fields:

@@ -55,6 +55,17 @@ def test_managed_upload_reads_the_scan_output():
     assert "scan-results/results.json" not in step["run"]
 
 
+def test_hosted_v2_never_skips_the_required_upload_or_falls_back_to_legacy():
+    upload = BY_NAME["Report findings to SourceBastion (managed mode)"]
+    gate = BY_NAME["Enforce the policy gate"]
+    assert "inputs.policy-gate-mode == 'hosted-v2'" in upload["if"]
+    assert upload["env"]["SOURCEBASTION_POLICY_GATE_MODE"] == (
+        "${{ inputs.policy-gate-mode }}"
+    )
+    assert "inputs.policy-gate-mode == 'legacy'" in gate["if"]
+    assert ACTION["inputs"]["policy-gate-mode"]["default"] == "legacy"
+
+
 def test_vulnerability_db_preparation_cannot_read_the_repository():
     script = BY_NAME["Scan the repository"]["run"]
     preparation, scan = script.split("docker run --rm", 2)[1:]

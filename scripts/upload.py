@@ -39,6 +39,7 @@ rejected, configuration error, or (strict mode) delivery failed; 2 = usage.
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -107,12 +108,20 @@ def main() -> int:
     source, base_url = sys.argv[1], sys.argv[2].rstrip("/")
     check_id = sys.argv[3] if len(sys.argv) > 3 else ""
     repo_key = sys.argv[4] if len(sys.argv) > 4 else ""
-    strict = os.environ.get("SOURCEBASTION_STRICT_UPLOAD", "").strip().lower() in ("1", "true", "yes")
+    gate_mode = os.environ.get("SOURCEBASTION_POLICY_GATE_MODE", "legacy").strip() or "legacy"
+    if gate_mode not in {"legacy", "hosted-v2"}:
+        print("SourceBastion: policy-gate-mode must be legacy or hosted-v2", file=sys.stderr)
+        return 1
+    hosted_v2 = gate_mode == "hosted-v2"
+    strict = hosted_v2 or os.environ.get("SOURCEBASTION_STRICT_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     # The free tier's boundary, first and unconditional: no key, no request.
     # Nothing below this line runs on a keyless scan.
     key = os.environ.get("SOURCEBASTION_API_KEY", "").strip()
     if not key:
+        if hosted_v2:
+            print("SourceBastion: hosted-v2 requires an API key; the gate cannot pass keyless", file=sys.stderr)
+            return 1
         print(
             "SourceBastion: no API key — staying keyless. Nothing was sent to the "
             "platform: no account, no repository record, no findings."
@@ -120,6 +129,9 @@ def main() -> int:
         return 0
 
     if os.environ.get("SOURCEBASTION_FORK_PR", "").strip().lower() == "true":
+        if hosted_v2:
+            print("SourceBastion: hosted-v2 cannot verify a fork PR without credentials", file=sys.stderr)
+            return 1
         print(
             "SourceBastion: fork pull request — GitHub withholds repository secrets "
             "from these runs, so this job reports nothing to the platform. The "
@@ -143,6 +155,17 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    if hosted_v2 and not all((
+        repo_key,
+        os.environ.get("COMMIT_SHA"),
+        os.environ.get("REF"),
+        os.environ.get("CI_RUN_ID"),
+    )):
+        print(
+            "SourceBastion: hosted-v2 requires repository, commit, ref, and CI run identity",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         with open(source, encoding="utf-8") as handle:
@@ -152,7 +175,8 @@ def main() -> int:
 
     sequence = os.environ.get("CI_RUN_SEQUENCE") or ""
     provider_trigger = os.environ.get("PROVIDER_TRIGGER") or ""
-    body = {
+    body = dict(payload) if isinstance(payload, dict) else {"findings": payload}
+    body.update({
         "repo_key": repo_key,
         "idempotency_key": os.environ.get("IDEMPOTENCY_KEY")
         or ":".join(
@@ -168,8 +192,7 @@ def main() -> int:
             "delivery_mode": os.environ.get("DELIVERY_MODE") or "api",
             "trigger_kind": TRIGGER_KINDS.get(provider_trigger, "unknown"),
         },
-    }
-    body.update(payload if isinstance(payload, dict) else {"findings": payload})
+    })
 
     request = urllib.request.Request(
         f"{base_url}/checks/{check_id}/ingest",
@@ -212,6 +235,34 @@ def main() -> int:
         result = document.get("result")
     policy_status = result.get("policy_status") if isinstance(result, dict) else None
     reason = result.get("reason") if isinstance(result, dict) else None
+    if hosted_v2:
+        expected = {
+            "policy_profile": "scan-gate.v2",
+            "policy_ref": os.environ["REF"],
+            "policy_repo_key": repo_key,
+            "policy_commit_sha": os.environ["COMMIT_SHA"],
+        }
+        if (
+            not isinstance(result, dict)
+            or any(result.get(name) != value for name, value in expected.items())
+            or not isinstance(result.get("policy_findings_run_id"), int)
+            or isinstance(result.get("policy_findings_run_id"), bool)
+            or result["policy_findings_run_id"] <= 0
+            or not isinstance(result.get("policy_snapshot_digest"), str)
+            or re.fullmatch(
+                r"sha256:[0-9a-f]{64}", result["policy_snapshot_digest"]
+            ) is None
+            or not isinstance(result.get("policy_bundle_digest"), str)
+            or re.fullmatch(
+                r"sha256:[0-9a-f]{64}", result["policy_bundle_digest"]
+            ) is None
+            or policy_status not in {"passed", "failed", "error"}
+        ):
+            print(
+                "SourceBastion: platform did not return a complete current-commit scan-gate.v2 decision",
+                file=sys.stderr,
+            )
+            return 1
     if policy_status == "passed":
         print("SourceBastion: uploaded; platform policy passed")
         return 0

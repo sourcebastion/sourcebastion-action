@@ -24,6 +24,13 @@ inputs:
       the gate.
     required: false
     default: high
+  policy-gate-mode:
+    description: >-
+      legacy keeps the existing local severity gate. hosted-v2 requires a
+      complete, current-commit scan-gate.v2 verdict from SourceBastion and
+      fails closed on missing credentials, fork secrets, or platform errors.
+    required: false
+    default: legacy
   api-key:
     description: >-
       Optional. Absent (the default) the scan is keyless: nothing is sent to
@@ -73,6 +80,7 @@ runs:
         # Inputs are data, not shell source. Keeping the expression out of the
         # script prevents a caller-controlled quote from becoming a command.
         SOURCEBASTION_IMAGE: ${{ inputs.image }}
+        SOURCEBASTION_GATE_MODE: ${{ inputs.policy-gate-mode }}
       run: |
         set -euo pipefail
         results_dir="$(mktemp -d "${RUNNER_TEMP:?}/sourcebastion-results.XXXXXX")"
@@ -80,6 +88,10 @@ runs:
 
         if [ "$(id -u)" -eq 0 ]; then
           echo "::error::SourceBastion refuses to override the scanner's non-root user with root. Run the self-hosted runner as an unprivileged account."
+          exit 2
+        fi
+        if [[ "$SOURCEBASTION_GATE_MODE" != "legacy" && "$SOURCEBASTION_GATE_MODE" != "hosted-v2" ]]; then
+          echo "::error::SourceBastion policy-gate-mode must be legacy or hosted-v2"
           exit 2
         fi
         if [[ ! "$SOURCEBASTION_IMAGE" =~ ^[A-Za-z0-9][^[:space:]@]*@sha256:[0-9a-f]{64}$ ]]; then
@@ -187,7 +199,7 @@ runs:
     # pipeline; policy rejection stays fatal and is decided by upload.py.
     - name: Report findings to SourceBastion (managed mode)
       id: upload
-      if: inputs.api-key != ''
+      if: inputs.api-key != '' || inputs.policy-gate-mode == 'hosted-v2'
       shell: bash
       env:
         SOURCEBASTION_API_KEY: ${{ inputs.api-key }}
@@ -195,6 +207,7 @@ runs:
         # PR cannot reach secrets and skips the upload honestly (M027 S09).
         SOURCEBASTION_FORK_PR: ${{ github.event.pull_request.head.repo.fork || false }}
         SOURCEBASTION_STRICT_UPLOAD: ${{ inputs.strict-upload }}
+        SOURCEBASTION_POLICY_GATE_MODE: ${{ inputs.policy-gate-mode }}
         # Inputs cross through env, never through `run`: expressions embedded
         # in run are substituted before bash parses the script, and an input
         # can carry quotes and shell metacharacters.
@@ -219,7 +232,7 @@ runs:
     # re-failing on a report that cannot exist would bury it.
     - name: Enforce the policy gate
       id: gate
-      if: always() && steps.scan.outcome == 'success'
+      if: always() && steps.scan.outcome == 'success' && inputs.policy-gate-mode == 'legacy'
       shell: bash
       env:
         SOURCEBASTION_ACTION_PATH: ${{ github.action_path }}
