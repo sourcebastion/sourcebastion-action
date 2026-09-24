@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
@@ -94,7 +96,7 @@ def test_annotations_escape_workflow_command_injection(tmp_path):
     assert "%250A::error" in completed.stdout
     assert "%0Anext" in completed.stdout
     summary_text = summary.read_text(encoding="utf-8")
-    assert "### ez-appsec scan: 1 finding" in summary_text
+    assert "### SourceBastion scan: 1 finding" in summary_text
     assert "::error" not in summary_text
 
 
@@ -123,8 +125,8 @@ def test_fork_signal_prevents_managed_upload(tmp_path):
     write_report(source, [])
     env = dict(
         os.environ,
-        EZ_APPSEC_API_KEY="must-not-be-sent",
-        EZ_APPSEC_FORK_PR="true",
+        SOURCEBASTION_API_KEY="must-not-be-sent",
+        SOURCEBASTION_FORK_PR="true",
     )
 
     completed = run_script(
@@ -138,10 +140,70 @@ def test_fork_signal_prevents_managed_upload(tmp_path):
 def test_managed_upload_requires_a_check_id_before_network(tmp_path):
     source = tmp_path / "results.json"
     write_report(source, [])
-    env = dict(os.environ, EZ_APPSEC_API_KEY="test-key")
-    env.pop("EZ_APPSEC_FORK_PR", None)
+    env = dict(os.environ, SOURCEBASTION_API_KEY="test-key")
+    env.pop("SOURCEBASTION_FORK_PR", None)
 
     completed = run_script("upload.py", str(source), "http://127.0.0.1:1", env=env)
 
     assert completed.returncode == 1
     assert "without a check id" in completed.stderr
+
+
+def test_managed_upload_requires_explicit_sourcebastion_url(tmp_path):
+    source = tmp_path / "results.json"
+    write_report(source, [])
+    env = dict(os.environ, SOURCEBASTION_API_KEY="test-key")
+    env.pop("SOURCEBASTION_FORK_PR", None)
+
+    completed = run_script("upload.py", str(source), "", "check-id", env=env)
+
+    assert completed.returncode == 1
+    assert "requires an explicit ingest-url" in completed.stderr
+
+
+def test_managed_upload_uses_sourcebastion_protocol(tmp_path):
+    source = tmp_path / "results.json"
+    write_report(source, [])
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 - HTTP server callback
+            length = int(self.headers["Content-Length"])
+            seen.append({
+                "path": self.path,
+                "content_type": self.headers["Content-Type"],
+                "user_agent": self.headers["User-Agent"],
+                "authorization": self.headers["Authorization"],
+                "body": json.loads(self.rfile.read(length)),
+            })
+            payload = b'{"ingest_result":{"policy_status":"passed"}}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = dict(os.environ, SOURCEBASTION_API_KEY="test-key")
+        env.pop("SOURCEBASTION_FORK_PR", None)
+        completed = run_script(
+            "upload.py", str(source), f"http://127.0.0.1:{server.server_port}",
+            "check-id", "repo-key", env=env,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert completed.returncode == 0, completed.stderr
+    assert seen[0]["path"] == "/checks/check-id/ingest"
+    assert seen[0]["content_type"] == "application/vnd.sourcebastion.ingest.v1+json"
+    assert seen[0]["user_agent"].startswith("sourcebastion-action/")
+    assert seen[0]["authorization"] == "Bearer test-key"
+    assert "test-key" not in json.dumps(seen[0]["body"])

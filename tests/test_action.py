@@ -47,11 +47,11 @@ def test_third_party_actions_are_sha_pinned_and_labelled():
 
 
 def test_managed_upload_reads_the_scan_output():
-    step = BY_NAME["Report findings to ez-appsec (managed mode)"]
-    assert step["env"]["EZ_APPSEC_RESULTS_DIR"] == (
+    step = BY_NAME["Report findings to SourceBastion (managed mode)"]
+    assert step["env"]["SOURCEBASTION_RESULTS_DIR"] == (
         "${{ steps.scan.outputs.results_dir }}"
     )
-    assert '"$EZ_APPSEC_RESULTS_DIR/results.json"' in step["run"]
+    assert '"$SOURCEBASTION_RESULTS_DIR/results.json"' in step["run"]
     assert "scan-results/results.json" not in step["run"]
 
 
@@ -59,7 +59,7 @@ def test_keyless_upload_performs_no_request(tmp_path):
     report = tmp_path / "results.json"
     report.write_text(json.dumps({"findings": []}), encoding="utf-8")
     env = dict(os.environ)
-    env.pop("EZ_APPSEC_API_KEY", None)
+    env.pop("SOURCEBASTION_API_KEY", None)
     completed = subprocess.run(
         [
             sys.executable,
@@ -155,3 +155,15 @@ def test_documentation_recommends_verifiable_usage():
     assert "gh attestation verify" in readme
     assert "full 40-character commit SHA" in prose
     assert "API-COMPATIBILITY.md" in readme
+
+
+def test_new_action_surfaces_are_sourcebastion_branded():
+    assert ACTION["name"] == "SourceBastion scan"
+    assert ACTION["author"] == "SourceBastion"
+    assert "ez-appsec" not in ACTION_TEXT.lower()
+    assert "EZ_APPSEC" not in ACTION_TEXT
+    assert ACTION["inputs"]["image"]["default"].startswith(
+        "ghcr.io/sourcebastion/sourcebastion-scanner@sha256:"
+    )
+    assert ACTION["inputs"]["ingest-url"]["default"] == ""
+    assert "sourcebastion-scan" in ACTION_TEXT

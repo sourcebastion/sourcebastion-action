@@ -10,7 +10,7 @@ retained platform routes.
 Clients send:
 
 ```http
-Content-Type: application/vnd.ez-appsec.ingest.v1+json
+Content-Type: application/vnd.sourcebastion.ingest.v1+json
 ```
 
 Within a major version, SourceBastion will not change the meaning or type of an

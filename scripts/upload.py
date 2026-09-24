@@ -15,7 +15,7 @@ cannot drift):
 * Envelope: ``repo_key``, ``idempotency_key``, ``run_context`` and the
   findings list, all optional server-side; this client always sends them
   when the CI environment provides the values.
-* Media type versioning: ``application/vnd.ez-appsec.ingest.v1+json``, so a
+* Media type versioning: ``application/vnd.sourcebastion.ingest.v1+json``, so a
   pinned ``@v1`` uploader keeps posting across additive platform changes.
   Its own version rides in ``User-Agent``.
 
@@ -25,7 +25,7 @@ Behaviour the free tier depends on:
   provably before any request is built. Keyless scans never touch us.
 * **A failed upload does not fail the build by default** (S05's own risk: a
   platform incident must not become an outage in every customer's pipeline).
-  Set ``EZ_APPSEC_STRICT_UPLOAD=true`` to make it fatal.
+  Set ``SOURCEBASTION_STRICT_UPLOAD=true`` to make it fatal.
 * **A policy rejection is always fatal** — the platform saw the scan and
   refused it; that is a gate verdict, not a delivery problem (M028-D6).
 * **Errors name the cause and the action** (M025 S03): an expired key, a
@@ -68,7 +68,7 @@ TRIGGER_KINDS = {
 # names the cause and the next action; none hides behind "upload failed".
 NAMED_ERRORS = {
     401: "the API key was rejected — it is expired or revoked. Mint a new key from the repository's Integrate-with-CI flow; it is shown once.",
-    403: "the platform refused this project — the key's project was revoked or its entitlement has lapsed. Check the project's status in the ez-appsec dashboard.",
+    403: "the platform refused this project — the key's project was revoked or its entitlement has lapsed. Check the project's status in the SourceBastion dashboard.",
     404: "the check was not found — the check id is wrong, or the platform URL points at the wrong deployment. Verify the check id in the dashboard.",
     429: "the platform is rate-limiting this project. The scan's verdict and artifacts are already delivered by this pipeline; retry, or contact support if it persists.",
 }
@@ -78,19 +78,19 @@ def _fail_delivery(message: str, strict: bool) -> int:
     # A delivery failure is reported loudly and — unless the customer asked
     # for strictness — does not fail the build (S05 T03). The workflow-command
     # form is GitHub-only; GitLab gets the same sentence as plain text.
-    line = f"ez-appsec: upload failed: {message}"
+    line = f"SourceBastion: upload failed: {message}"
     if os.environ.get("GITHUB_ACTIONS") == "true":
         print("::error::" + line, file=sys.stderr)
     else:
         print(line, file=sys.stderr)
     if strict:
         print(
-            "ez-appsec: EZ_APPSEC_STRICT_UPLOAD is set, so this failure fails the build.",
+            "SourceBastion: SOURCEBASTION_STRICT_UPLOAD is set, so this failure fails the build.",
             file=sys.stderr,
         )
         return 1
     print(
-        "ez-appsec: the scan's verdict and artifacts were delivered by this pipeline; "
+        "SourceBastion: the scan's verdict and artifacts were delivered by this pipeline; "
         "the platform copy is what is missing.",
         file=sys.stderr,
     )
@@ -107,21 +107,21 @@ def main() -> int:
     source, base_url = sys.argv[1], sys.argv[2].rstrip("/")
     check_id = sys.argv[3] if len(sys.argv) > 3 else ""
     repo_key = sys.argv[4] if len(sys.argv) > 4 else ""
-    strict = os.environ.get("EZ_APPSEC_STRICT_UPLOAD", "").strip().lower() in ("1", "true", "yes")
+    strict = os.environ.get("SOURCEBASTION_STRICT_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     # The free tier's boundary, first and unconditional: no key, no request.
     # Nothing below this line runs on a keyless scan.
-    key = os.environ.get("EZ_APPSEC_API_KEY", "").strip()
+    key = os.environ.get("SOURCEBASTION_API_KEY", "").strip()
     if not key:
         print(
-            "ez-appsec: no API key — staying keyless. Nothing was sent to the "
+            "SourceBastion: no API key — staying keyless. Nothing was sent to the "
             "platform: no account, no repository record, no findings."
         )
         return 0
 
-    if os.environ.get("EZ_APPSEC_FORK_PR", "").strip().lower() == "true":
+    if os.environ.get("SOURCEBASTION_FORK_PR", "").strip().lower() == "true":
         print(
-            "ez-appsec: fork pull request — GitHub withholds repository secrets "
+            "SourceBastion: fork pull request — GitHub withholds repository secrets "
             "from these runs, so this job reports nothing to the platform. The "
             "scan, its annotations and its artifacts are unaffected; nothing is "
             "misconfigured."
@@ -130,9 +130,16 @@ def main() -> int:
 
     if not check_id:
         print(
-            "ez-appsec: an API key was provided without a check id. Set the "
-            "check-id input (GitHub) or EZ_APPSEC_CHECK_ID (GitLab) to the check "
+            "SourceBastion: an API key was provided without a check id. Set the "
+            "check-id input (GitHub) or SOURCEBASTION_CHECK_ID (GitLab) to the check "
             "this repository reports to.",
+            file=sys.stderr,
+        )
+        return 1
+    if not base_url:
+        print(
+            "SourceBastion: an API key requires an explicit ingest-url until "
+            "the production SourceBastion API host is available.",
             file=sys.stderr,
         )
         return 1
@@ -171,8 +178,8 @@ def main() -> int:
             "Authorization": f"Bearer {key}",
             # Media-type versioning: v1 keeps posting across additive changes
             # (INGEST-CONTRACT T02/T04). The key is in the header, never the body.
-            "Content-Type": "application/vnd.ez-appsec.ingest.v1+json",
-            "User-Agent": f"ez-appsec-action/{VERSION}",
+            "Content-Type": "application/vnd.sourcebastion.ingest.v1+json",
+            "User-Agent": f"sourcebastion-action/{VERSION}",
         },
         method="POST",
     )
@@ -206,13 +213,13 @@ def main() -> int:
     policy_status = result.get("policy_status") if isinstance(result, dict) else None
     reason = result.get("reason") if isinstance(result, dict) else None
     if policy_status == "passed":
-        print("ez-appsec: uploaded; platform policy passed")
+        print("SourceBastion: uploaded; platform policy passed")
         return 0
     message = reason or (
         "platform policy failed" if policy_status == "failed"
         else "platform returned no final policy verdict"
     )
-    print(f"ez-appsec: the platform rejected this scan: {message}", file=sys.stderr)
+    print(f"SourceBastion: the platform rejected this scan: {message}", file=sys.stderr)
     return 1
 
 

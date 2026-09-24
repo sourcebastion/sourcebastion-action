@@ -27,7 +27,7 @@ try:
     with open(source, encoding="utf-8") as handle:
         payload = json.load(handle)
 except (OSError, ValueError) as exc:
-    print(f"ez-appsec: native report unreadable; no annotations ({exc})", file=sys.stderr)
+    print(f"SourceBastion: native report unreadable; no annotations ({exc})", file=sys.stderr)
     raise SystemExit(0)
 
 
@@ -152,7 +152,7 @@ def message_of(finding):
     for key in ("message", "description", "name", "title"):
         if isinstance(finding.get(key), str) and finding[key].strip():
             return finding[key].strip()
-    return "ez-appsec finding"
+    return "SourceBastion finding"
 
 
 def bounded(value, limit=MAX_MESSAGE_CHARS):
@@ -235,7 +235,7 @@ for finding in ranked:
 
 total = len(findings)
 summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-lines = [f"### ez-appsec scan: {total} finding{'s' if total != 1 else ''}"]
+lines = [f"### SourceBastion scan: {total} finding{'s' if total != 1 else ''}"]
 lines.append("")
 if total:
     lines.append("| Severity | Count |")
@@ -259,10 +259,10 @@ if total:
     held = held_back["error"] + held_back["warning"] + held_back["notice"]
     if held:
         lines.append(
-            f"ez-appsec emits at most {LIMIT_PER_LEVEL} error, {LIMIT_PER_LEVEL} warning "
+            f"SourceBastion emits at most {LIMIT_PER_LEVEL} error, {LIMIT_PER_LEVEL} warning "
             f"and {LIMIT_PER_LEVEL} notice annotations per step; {shown} of {total} "
             "findings are annotated above. "
-            f"**{held} more are in the `ez-appsec-scan` artifact** (results.sarif)."
+            f"**{held} more are in the `sourcebastion-scan` artifact** (results.sarif)."
         )
         lines.append("")
     if pathless_count:
@@ -281,7 +281,7 @@ if total:
         if omitted_pathless:
             lines.append(
                 f"- **{omitted_pathless} more path-less findings are in the "
-                "`ez-appsec-scan` artifact.**"
+                "`sourcebastion-scan` artifact.**"
             )
         lines.append("")
 else:
@@ -295,9 +295,9 @@ if summary_path:
         # The summary is a view. Its filesystem failing must not replace the
         # scanner/platform verdict; annotations already printed remain useful.
         print(
-            f"ez-appsec: step summary could not be written ({exc})", file=sys.stderr
+            f"SourceBastion: step summary could not be written ({exc})", file=sys.stderr
         )
 print(
-    f"ez-appsec: {annotated['error']} error, {annotated['warning']} warning, "
+    f"SourceBastion: {annotated['error']} error, {annotated['warning']} warning, "
     f"{annotated['notice']} notice annotations"
 )

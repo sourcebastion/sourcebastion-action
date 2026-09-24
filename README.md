@@ -1,4 +1,4 @@
-# ez-appsec scan
+# SourceBastion scan
 
 Scan your repository and gate your pipeline. **No account, no configuration,
 no secrets** — the free tier is a verdict on one commit, delivered through
@@ -15,7 +15,7 @@ what a paid scan detects; what it does not do is remember anything — no
 cross-run history, triage state, or dashboards on our side. Adding an API key
 turns the same scan into a managed one — see "Managed mode" below. Without
 it (the default) there is nothing to configure and nothing leaves your runner:
-findings are not sent to ez-appsec, and GitHub receives only the annotations
+findings are not sent to SourceBastion, and GitHub receives only the annotations
 and optional run/code-scanning artifacts described above.
 
 > [!NOTE]
@@ -32,7 +32,7 @@ and optional run/code-scanning artifacts described above.
 ## Usage
 
 ```yaml
-name: ez-appsec
+name: SourceBastion
 on:
   push:
     branches: [main]
@@ -42,7 +42,7 @@ permissions:
   contents: read
 
 jobs:
-  ez-appsec:
+  sourcebastion:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -82,12 +82,12 @@ optional upload fails, everything the free tier promises still happens.
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `image` | digest-pinned `ghcr.io/ez-appsec/ez-appsec@sha256:…` | Override only with another digest-pinned reference. The Action rejects tags and other floating references. |
+| `image` | digest-pinned `ghcr.io/sourcebastion/sourcebastion-scanner@sha256:…` | Override only with another digest-pinned reference. The Action rejects tags and other floating references. |
 | `fail-on-severity` | `high` | Lowest severity that fails the build: `critical`, `high`, `medium`, `low`, `none`. |
-| `api-key` | *(empty — keyless)* | Set it and the same scan is also reported to the platform. Pass a secret: `api-key: ${{ secrets.EZ_APPSEC_API_KEY }}`. |
+| `api-key` | *(empty — keyless)* | Set it and the same scan is also reported to the platform. Pass a secret: `api-key: ${{ secrets.SOURCEBASTION_API_KEY }}`. |
 | `check-id` | *(empty)* | Required with `api-key`; minted with the key from the Integrate-with-CI flow. |
 | `repo-key` | *(empty)* | Repository identity within the check, for lifecycle and delta on the platform. |
-| `ingest-url` | `https://api.ez-appsec.com` | Platform base URL the scan reports to. |
+| `ingest-url` | *(empty)* | Required with `api-key` until the production SourceBastion API host is available. Use your deployment's HTTPS API base URL. |
 | `strict-upload` | `false` | `true` makes a failed platform upload fail the build. |
 
 ## Exit codes
@@ -109,8 +109,9 @@ never fails the build.
 ```yaml
       - uses: sourcebastion/sourcebastion-action@v1
         with:
-          api-key: ${{ secrets.EZ_APPSEC_API_KEY }}
+          api-key: ${{ secrets.SOURCEBASTION_API_KEY }}
           check-id: chk_your_check
+          ingest-url: https://staging-api.sourcebastion.com/api
 ```
 
 The same scan runs — same scanner, same findings, same gate. With a key it
@@ -150,8 +151,8 @@ environment are separate controls.
 
 ## What the free tier does not do
 
-No ez-appsec account, repository record, finding row, or execution record is
-created, and no request is made to the ez-appsec platform. Your CI provider
+No SourceBastion account, repository record, finding row, or execution record is
+created, and no request is made to the SourceBastion platform. Your CI provider
 retains annotations, logs and artifacts under its own retention rules — that
 is delivery, not a history product. If you need a dismissal to stay dismissed,
 cross-run fingerprints, or "open 40 days" SLA clocks, that is the managed
@@ -159,7 +160,7 @@ product.
 
 ## Support
 
-**ez-appsec is published under MIT and maintained on a best-effort basis.**
+**SourceBastion is published under MIT and maintained on a best-effort basis.**
 Issues and pull requests are welcome and read, but there is no response-time
 commitment and issues may be closed unanswered. Two things carry real
 commitments: **security reports** (see [SECURITY.md](SECURITY.md)) and
