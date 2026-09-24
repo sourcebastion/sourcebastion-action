@@ -55,6 +55,18 @@ def test_managed_upload_reads_the_scan_output():
     assert "scan-results/results.json" not in step["run"]
 
 
+def test_vulnerability_db_preparation_cannot_read_the_repository():
+    script = BY_NAME["Scan the repository"]["run"]
+    preparation, scan = script.split("docker run --rm", 2)[1:]
+    assert "--entrypoint grype" in preparation
+    assert "db update" in preparation
+    assert "$GITHUB_WORKSPACE" not in preparation
+    assert "SOURCEBASTION_API_KEY" not in preparation
+    assert "--network none" in scan
+    assert "$GITHUB_WORKSPACE:/scan:ro" in scan
+    assert "GRYPE_DB_AUTO_UPDATE=false" in scan
+
+
 def test_keyless_upload_performs_no_request(tmp_path):
     report = tmp_path / "results.json"
     report.write_text(json.dumps({"findings": []}), encoding="utf-8")
