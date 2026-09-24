@@ -90,6 +90,8 @@ runs:
         docker run --rm \
           --user "$(id -u):$(id -g)" \
           --env HOME=/tmp \
+          --env SEMGREP_ENABLE_VERSION_CHECK=0 \
+          --env SEMGREP_SEND_METRICS=off \
           --network none \
           --volume "$GITHUB_WORKSPACE:/scan:ro" \
           --volume "$results_dir:/out" \
