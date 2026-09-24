@@ -223,6 +223,11 @@ def main() -> int:
             if (
                 not isinstance(result, dict)
                 or any(result.get(name) != value for name, value in expected.items())
+                or not isinstance(result.get("policy_engine_version"), str)
+                or re.fullmatch(
+                    r"[0-9]+\.[0-9]+\.[0-9]+",
+                    result["policy_engine_version"],
+                ) is None
                 or not isinstance(result.get("policy_findings_run_id"), int)
                 or isinstance(result.get("policy_findings_run_id"), bool)
                 or result["policy_findings_run_id"] <= 0

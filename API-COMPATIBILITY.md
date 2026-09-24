@@ -28,18 +28,20 @@ window will be announced in release notes and in this document before the old
 version is removed. No blanket response-time or support-duration commitment is
 made here.
 
-## M043 hosted-v2 opt-in (not yet available from ingest)
+## M043 hosted-v2 opt-in
 
-The Action's optional `hosted-v2` mode will accept a green response only when
-`ingest_result` contains a server-owned `scan-gate.v2` decision with
-`policy_status`, `policy_repo_key`, `policy_ref`, `policy_commit_sha`,
-`policy_findings_run_id`, `policy_snapshot_digest`, and
-`policy_bundle_digest`. Repository, ref, and commit must match the CI run that
-uploaded the report. `failed`, `error`, missing fields, stale identity, and
-transport failures are all non-green. This is an additive response shape,
-not a claim that the current v1 ingest service can yet produce the decision.
+The Action's optional `hosted-v2` mode does not upload its CI report. It reads
+`GET /checks/{check_id}/policy-decision` with a project-scoped Bearer key and
+the exact GitHub repository key, PR/branch head ref, and commit SHA. A 202 is
+pending; a 409 is missing or stale. A 200 can be green only when the
+server-owned `scan-gate.v2` response has `policy_status: passed`, a semantic
+`policy_engine_version`, matching repository/ref/commit, positive
+`policy_findings_run_id`, nonnegative project/account policy versions, and
+valid snapshot and bundle SHA-256 digests. `failed`, `error`, missing fields,
+stale identity, and transport failures are non-green. The platform must
+revalidate its GitHub App-owned decision and protected target before the 200.
 Do not enable `hosted-v2` on a required check before that server integration
-and conformance proof are released.
+and provider protection are released.
 
 ## Finding-data privacy
 

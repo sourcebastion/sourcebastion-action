@@ -191,6 +191,7 @@ def test_hosted_v2_requires_current_commit_versioned_decision(tmp_path):
         env.pop("SOURCEBASTION_FORK_PR", None)
         valid = {
             "policy_profile": "scan-gate.v2", "policy_status": "passed",
+            "policy_engine_version": "0.2.0",
             "policy_ref": env["SOURCEBASTION_GATE_REF"],
             "policy_repo_key": "repo-key",
             "policy_commit_sha": env["SOURCEBASTION_GATE_COMMIT_SHA"],
@@ -204,6 +205,7 @@ def test_hosted_v2_requires_current_commit_versioned_decision(tmp_path):
             {"policy_status": "passed"},
             {**valid, "policy_commit_sha": "d" * 40},
             {**valid, "policy_bundle_digest": "invalid"},
+            {**valid, "policy_engine_version": ""},
             valid,
             {**valid, "policy_status": "error"},
         ])
@@ -212,17 +214,17 @@ def test_hosted_v2_requires_current_commit_versioned_decision(tmp_path):
                 "upload.py", str(source), f"http://127.0.0.1:{server.server_port}",
                 "check-id", "repo-key", env=env,
             )
-            for _ in range(5)
+            for _ in range(6)
         ]
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
 
-    assert [outcome.returncode for outcome in outcomes] == [1, 1, 1, 0, 1]
+    assert [outcome.returncode for outcome in outcomes] == [1, 1, 1, 1, 0, 1]
     assert "scan-gate.v2 decision" in outcomes[0].stderr
     assert "scan-gate.v2 decision" in outcomes[1].stderr
-    assert len(requests) == 5
+    assert len(requests) == 6
     assert all(path.startswith("/checks/check-id/policy-decision?") for path, _ in requests)
     assert all("ref=refs%2Fpull%2F7%2Fhead" in path for path, _ in requests)
     assert all("commit_sha=" + "a" * 40 in path for path, _ in requests)
