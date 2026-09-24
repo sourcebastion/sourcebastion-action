@@ -297,6 +297,14 @@ def main() -> int:
         with urllib.request.urlopen(request, timeout=30) as response:
             document = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            print(
+                "SourceBastion: the platform rejected this CI report because "
+                "the hosted policy gate owns this project or its scan identity "
+                "conflicts; use hosted-v2 verification for an App-gated project",
+                file=sys.stderr,
+            )
+            return 1
         message = NAMED_ERRORS.get(exc.code)
         if message is None:
             message = (

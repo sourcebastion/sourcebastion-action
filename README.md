@@ -107,7 +107,9 @@ optional upload fails, everything the free tier promises still happens.
 
 A failed *optional delivery* (code-scanning upload, or a platform upload
 without `strict-upload`) is reported with an error naming the cause and
-never fails the build.
+never fails the build. A platform HTTP 409 is different: it rejects a
+conflicting scan or an upload to an App-gated project and always fails the
+job, even in legacy mode.
 
 ## Managed mode: add a key, that is all
 

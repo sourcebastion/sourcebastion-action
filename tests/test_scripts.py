@@ -301,6 +301,38 @@ def test_managed_upload_uses_sourcebastion_protocol(tmp_path):
     assert "test-key" not in json.dumps(seen[0]["body"])
 
 
+def test_hosted_cutover_rejection_is_fatal_even_without_strict_upload(tmp_path):
+    source = tmp_path / "results.json"
+    write_report(source, [])
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 - HTTP server callback
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(409)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = dict(os.environ, SOURCEBASTION_API_KEY="test-key")
+        env.pop("SOURCEBASTION_FORK_PR", None)
+        env.pop("SOURCEBASTION_STRICT_UPLOAD", None)
+        result = run_script(
+            "upload.py", str(source), f"http://127.0.0.1:{server.server_port}",
+            "check-id", "repo-key", env=env,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    assert result.returncode == 1
+    assert "hosted policy gate owns this project" in result.stderr
+
+
 def test_report_cannot_override_ci_repository_or_commit_identity(tmp_path):
     source = tmp_path / "results.json"
     source.write_text(json.dumps({
