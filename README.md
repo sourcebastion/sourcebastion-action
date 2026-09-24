@@ -57,7 +57,10 @@ The Action requires a Linux runner with Bash, Python 3, and Docker. GitHub's
 unprivileged account: the Action deliberately refuses to turn the scanner into
 a root container. The repository is mounted read-only, the report is written
 to the runner's temporary directory, and the scanner runs without network
-access.
+access. Before that scan, a separate container downloads Grype's vulnerability
+database from Anchore. That preparation container has no repository mount or
+SourceBastion credential; if the database cannot be prepared, the scan fails
+closed.
 
 ## Permissions
 
@@ -116,9 +119,10 @@ never fails the build.
 
 The same scan runs — same scanner, same findings, same gate. With a key it
 is *also* posted to the platform: persistence, cross-run history, triage
-state, dashboards. Nothing else changes. Without a key, nothing is sent
-anywhere — `upload.py`'s first guard exits before any request is built, and
-that is the point. Fork pull requests cannot reach secrets, so they run
+state, dashboards. Nothing else changes. Without a key, no findings are sent
+to SourceBastion — `upload.py`'s first guard exits before any platform request
+is built. The image pull and the vulnerability-database download still use the
+network, without access to the repository contents. Fork pull requests run
 keyless with a message saying so.
 
 A platform upload failure does not fail your build by default — your
