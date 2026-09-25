@@ -77,7 +77,7 @@ def main():
     threshold = sys.argv[2] if len(sys.argv) > 2 else "high"
     if threshold not in THRESHOLDS:
         print(
-            f"ez-appsec: fail-on-severity must be one of "
+            f"SourceBastion: fail-on-severity must be one of "
             f"{', '.join(THRESHOLDS)}",
             file=sys.stderr,
         )
@@ -88,7 +88,7 @@ def main():
             payload = json.load(handle)
     except (OSError, ValueError) as exc:
         print(
-            f"ez-appsec: the scan report could not be read, so the policy "
+            f"SourceBastion: the scan report could not be read, so the policy "
             f"verdict cannot be evaluated: {exc}",
             file=sys.stderr,
         )
@@ -98,13 +98,13 @@ def main():
         raw_findings = findings_of(payload)
     except ValueError as exc:
         print(
-            f"ez-appsec: the scan report cannot be graded: {exc}",
+            f"SourceBastion: the scan report cannot be graded: {exc}",
             file=sys.stderr,
         )
         raise SystemExit(2)
     if any(not isinstance(finding, dict) for finding in raw_findings):
         print(
-            "ez-appsec: the scan report cannot be graded: every finding must "
+            "SourceBastion: the scan report cannot be graded: every finding must "
             "be an object",
             file=sys.stderr,
         )
@@ -128,7 +128,7 @@ def main():
         if graded[severity]
     }
 
-    lines = [f"### ez-appsec policy: {len(findings)} finding{'s' if len(findings) != 1 else ''}"]
+    lines = [f"### SourceBastion policy: {len(findings)} finding{'s' if len(findings) != 1 else ''}"]
     lines.append("")
     if findings:
         lines.append("| Severity | Count |")
@@ -148,17 +148,17 @@ def main():
             # The summary is a delivery surface, not the verdict. Preserve the
             # evaluated exit code and explain the degraded presentation.
             print(
-                f"ez-appsec: could not write the job summary: {exc}",
+                f"SourceBastion: could not write the job summary: {exc}",
                 file=sys.stderr,
             )
 
     if not failing:
-        print(f"ez-appsec policy passed ({len(findings)} findings, threshold {threshold})")
+        print(f"SourceBastion policy passed ({len(findings)} findings, threshold {threshold})")
         raise SystemExit(0)
 
     detail = ", ".join(f"{count} {severity}" for severity, count in failing.items())
     print(
-        f"ez-appsec policy failed: {detail} at or above the "
+        f"SourceBastion policy failed: {detail} at or above the "
         f"'{threshold}' threshold",
         file=sys.stderr,
     )

@@ -1,4 +1,4 @@
-# ez-appsec scan
+# SourceBastion scan
 
 Scan your repository and gate your pipeline. **No account, no configuration,
 no secrets** — the free tier is a verdict on one commit, delivered through
@@ -15,7 +15,7 @@ what a paid scan detects; what it does not do is remember anything — no
 cross-run history, triage state, or dashboards on our side. Adding an API key
 turns the same scan into a managed one — see "Managed mode" below. Without
 it (the default) there is nothing to configure and nothing leaves your runner:
-findings are not sent to ez-appsec, and GitHub receives only the annotations
+findings are not sent to SourceBastion, and GitHub receives only the annotations
 and optional run/code-scanning artifacts described above.
 
 > [!NOTE]
@@ -32,7 +32,7 @@ and optional run/code-scanning artifacts described above.
 ## Usage
 
 ```yaml
-name: ez-appsec
+name: SourceBastion
 on:
   push:
     branches: [main]
@@ -42,7 +42,7 @@ permissions:
   contents: read
 
 jobs:
-  ez-appsec:
+  sourcebastion:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -57,7 +57,10 @@ The Action requires a Linux runner with Bash, Python 3, and Docker. GitHub's
 unprivileged account: the Action deliberately refuses to turn the scanner into
 a root container. The repository is mounted read-only, the report is written
 to the runner's temporary directory, and the scanner runs without network
-access.
+access. Before that scan, a separate container downloads Grype's vulnerability
+database from Anchore. That preparation container has no repository mount or
+SourceBastion credential; if the database cannot be prepared, the scan fails
+closed.
 
 ## Permissions
 
@@ -82,13 +85,14 @@ optional upload fails, everything the free tier promises still happens.
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `image` | digest-pinned `ghcr.io/ez-appsec/ez-appsec@sha256:…` | Override only with another digest-pinned reference. The Action rejects tags and other floating references. |
+| `image` | digest-pinned `ghcr.io/sourcebastion/sourcebastion-scanner@sha256:…` | Override only with another digest-pinned reference. The Action rejects tags and other floating references. |
 | `fail-on-severity` | `high` | Lowest severity that fails the build: `critical`, `high`, `medium`, `low`, `none`. |
-| `api-key` | *(empty — keyless)* | Set it and the same scan is also reported to the platform. Pass a secret: `api-key: ${{ secrets.EZ_APPSEC_API_KEY }}`. |
+| `policy-gate-mode` | `legacy` | `legacy` uses the local severity gate. `hosted-v2` reads the GitHub App's current-PR-head, versioned SourceBastion decision and never falls back to the legacy gate. |
+| `api-key` | *(empty — keyless)* | Set it and the same scan is also reported to the platform. Pass a secret: `api-key: ${{ secrets.SOURCEBASTION_API_KEY }}`. |
 | `check-id` | *(empty)* | Required with `api-key`; minted with the key from the Integrate-with-CI flow. |
 | `repo-key` | *(empty)* | Repository identity within the check, for lifecycle and delta on the platform. |
-| `ingest-url` | `https://api.ez-appsec.com` | Platform base URL the scan reports to. |
-| `strict-upload` | `false` | `true` makes a failed platform upload fail the build. |
+| `ingest-url` | *(empty)* | Required with `api-key` until the production SourceBastion API host is available. Use your deployment's HTTPS API base URL. |
+| `strict-upload` | `false` | `true` makes a failed platform upload fail the build. `hosted-v2` always treats upload failure as fatal. |
 
 ## Exit codes
 
@@ -98,27 +102,33 @@ optional upload fails, everything the free tier promises still happens.
 | job fails, gate step, exit 1 | Policy violation: findings at or above `fail-on-severity` |
 | job fails, gate step, exit 2 | Output could not be evaluated (report missing, unreadable, structurally invalid, or an invalid threshold) — fail closed |
 | job fails, upload step | Managed mode only: the platform rejected the scan (always fatal), or `strict-upload: true` and the upload failed |
+| job fails, hosted-v2 verification step | Required credentials, complete current-head v2 decision, or platform delivery was unavailable; no legacy fallback |
 | job succeeds | Policy passed |
 
 A failed *optional delivery* (code-scanning upload, or a platform upload
 without `strict-upload`) is reported with an error naming the cause and
-never fails the build.
+never fails the build. A platform HTTP 409 is different: it rejects a
+conflicting scan or an upload to an App-gated project and always fails the
+job, even in legacy mode.
 
 ## Managed mode: add a key, that is all
 
 ```yaml
       - uses: sourcebastion/sourcebastion-action@v1
         with:
-          api-key: ${{ secrets.EZ_APPSEC_API_KEY }}
+          api-key: ${{ secrets.SOURCEBASTION_API_KEY }}
           check-id: chk_your_check
+          ingest-url: https://staging-api.sourcebastion.com/api
 ```
 
-The same scan runs — same scanner, same findings, same gate. With a key it
+In the default `legacy` mode, the same scan runs — same scanner, same findings,
+same gate. With a key it
 is *also* posted to the platform: persistence, cross-run history, triage
-state, dashboards. Nothing else changes. Without a key, nothing is sent
-anywhere — `upload.py`'s first guard exits before any request is built, and
-that is the point. Fork pull requests cannot reach secrets, so they run
-keyless with a message saying so.
+state, dashboards. Nothing else changes in `legacy` mode. Without a key, no findings are sent
+to SourceBastion — `upload.py`'s first guard exits before any platform request
+is built. The image pull and the vulnerability-database download still use the
+network, without access to the repository contents. In `legacy` mode, fork
+pull requests run keyless with a message saying so.
 
 A platform upload failure does not fail your build by default — your
 pipeline already has the verdict and the artifacts. Errors name the cause
@@ -126,6 +136,19 @@ pipeline already has the verdict and the artifacts. Errors name the cause
 fix is obvious. The request schema is a published contract: `openapi.json`
 here is a deterministic **ingest-only** export generated from the platform's
 own models — it describes the ingest endpoint and nothing else.
+
+### Hosted v2 opt-in is not yet a production gate
+
+`policy-gate-mode: hosted-v2` disables the local threshold fallback and
+reads the platform's GitHub App-owned `scan-gate.v2` decision for the exact
+repository and PR head (or pushed branch head). It waits up to five minutes
+for the App scan, then fails closed. It does not upload the Action's separate
+CI report into the App's authoritative findings snapshot. A missing key,
+fork-secret loss, absent App scan, stale policy, or incomplete decision fails
+the job. This mode needs the M043 platform endpoint and GitHub App enforcement
+to be deployed and verified together. Keep the default
+`legacy` mode for existing workflows; do not make `hosted-v2` a required
+check yet.
 
 ## Verify a release
 
@@ -150,8 +173,8 @@ environment are separate controls.
 
 ## What the free tier does not do
 
-No ez-appsec account, repository record, finding row, or execution record is
-created, and no request is made to the ez-appsec platform. Your CI provider
+No SourceBastion account, repository record, finding row, or execution record is
+created, and no request is made to the SourceBastion platform. Your CI provider
 retains annotations, logs and artifacts under its own retention rules — that
 is delivery, not a history product. If you need a dismissal to stay dismissed,
 cross-run fingerprints, or "open 40 days" SLA clocks, that is the managed
@@ -159,7 +182,7 @@ product.
 
 ## Support
 
-**ez-appsec is published under MIT and maintained on a best-effort basis.**
+**SourceBastion is published under MIT and maintained on a best-effort basis.**
 Issues and pull requests are welcome and read, but there is no response-time
 commitment and issues may be closed unanswered. Two things carry real
 commitments: **security reports** (see [SECURITY.md](SECURITY.md)) and

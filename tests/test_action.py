@@ -47,19 +47,44 @@ def test_third_party_actions_are_sha_pinned_and_labelled():
 
 
 def test_managed_upload_reads_the_scan_output():
-    step = BY_NAME["Report findings to ez-appsec (managed mode)"]
-    assert step["env"]["EZ_APPSEC_RESULTS_DIR"] == (
+    step = BY_NAME["Report findings or verify SourceBastion gate"]
+    assert step["env"]["SOURCEBASTION_RESULTS_DIR"] == (
         "${{ steps.scan.outputs.results_dir }}"
     )
-    assert '"$EZ_APPSEC_RESULTS_DIR/results.json"' in step["run"]
+    assert '"$SOURCEBASTION_RESULTS_DIR/results.json"' in step["run"]
     assert "scan-results/results.json" not in step["run"]
+
+
+def test_hosted_v2_never_skips_verification_or_falls_back_to_legacy():
+    upload = BY_NAME["Report findings or verify SourceBastion gate"]
+    gate = BY_NAME["Enforce the policy gate"]
+    assert "inputs.policy-gate-mode == 'hosted-v2'" in upload["if"]
+    assert upload["env"]["SOURCEBASTION_POLICY_GATE_MODE"] == (
+        "${{ inputs.policy-gate-mode }}"
+    )
+    assert "inputs.policy-gate-mode == 'legacy'" in gate["if"]
+    assert "pull_request.head.sha || github.sha" in upload["env"]["SOURCEBASTION_GATE_COMMIT_SHA"]
+    assert "refs/pull/{0}/head" in upload["env"]["SOURCEBASTION_GATE_REF"]
+    assert ACTION["inputs"]["policy-gate-mode"]["default"] == "legacy"
+
+
+def test_vulnerability_db_preparation_cannot_read_the_repository():
+    script = BY_NAME["Scan the repository"]["run"]
+    preparation, scan = script.split("docker run --rm", 2)[1:]
+    assert "--entrypoint grype" in preparation
+    assert "db update" in preparation
+    assert "$GITHUB_WORKSPACE" not in preparation
+    assert "SOURCEBASTION_API_KEY" not in preparation
+    assert "--network none" in scan
+    assert "$GITHUB_WORKSPACE:/scan:ro" in scan
+    assert "GRYPE_DB_AUTO_UPDATE=false" in scan
 
 
 def test_keyless_upload_performs_no_request(tmp_path):
     report = tmp_path / "results.json"
     report.write_text(json.dumps({"findings": []}), encoding="utf-8")
     env = dict(os.environ)
-    env.pop("EZ_APPSEC_API_KEY", None)
+    env.pop("SOURCEBASTION_API_KEY", None)
     completed = subprocess.run(
         [
             sys.executable,
@@ -155,3 +180,15 @@ def test_documentation_recommends_verifiable_usage():
     assert "gh attestation verify" in readme
     assert "full 40-character commit SHA" in prose
     assert "API-COMPATIBILITY.md" in readme
+
+
+def test_new_action_surfaces_are_sourcebastion_branded():
+    assert ACTION["name"] == "SourceBastion scan"
+    assert ACTION["author"] == "SourceBastion"
+    assert "ez-appsec" not in ACTION_TEXT.lower()
+    assert "EZ_APPSEC" not in ACTION_TEXT
+    assert ACTION["inputs"]["image"]["default"].startswith(
+        "ghcr.io/sourcebastion/sourcebastion-scanner@sha256:"
+    )
+    assert ACTION["inputs"]["ingest-url"]["default"] == ""
+    assert "sourcebastion-scan" in ACTION_TEXT

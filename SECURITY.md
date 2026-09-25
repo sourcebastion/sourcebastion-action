@@ -22,7 +22,7 @@ repository's README.
 
 This repository ships a CI integration: it runs a digest-pinned scanner
 image in your pipeline and, only if you supply an API key, posts results to
-the ez-appsec platform. Reports about the scanner's detection rules belong
+the SourceBastion platform. Reports about the scanner's detection rules belong
 in the scanner repository; reports about the platform's handling of an
 uploaded scan belong with the platform. Everything in between — the CI
 files and scripts this repository ships, including the uploader — is this

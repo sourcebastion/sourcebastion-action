@@ -1,6 +1,6 @@
 import json, sys
 
-# ez-appsec severity -> SARIF level. SARIF has four levels and no "critical",
+# SourceBastion severity -> SARIF level. SARIF has four levels and no "critical",
 # so critical and high share "error" -- the one lossy point, stated in
 # docs/M030/S01-SARIF.md and mirrored by the inverse table the platform's own
 # inbound normalizer (findings_sarif.py) already uses.
@@ -19,7 +19,7 @@ try:
     with open(source, encoding="utf-8") as handle:
         payload = json.load(handle)
 except (OSError, ValueError) as exc:
-    print(f"ez-appsec: native report unreadable; no SARIF written: {exc}", file=sys.stderr)
+    print(f"SourceBastion: native report unreadable; no SARIF written: {exc}", file=sys.stderr)
     raise SystemExit(0)
 
 
@@ -38,7 +38,7 @@ def findings_of(document):
 
 
 def rule_id_of(finding):
-    # FindingV2 -- the shape written by `ez-appsec scan --output` -- carries
+    # FindingV2 -- the shape written by `sourcebastion scan --output` -- carries
     # the canonical identity at the top level. Prefer those explicit rule
     # fields before consulting legacy/GitLab identifiers. Do not use `id`
     # here: in GitLab-shaped reports it is the finding UUID, not the rule.
@@ -68,7 +68,7 @@ def rule_id_of(finding):
     for key in ("category", "type"):
         if isinstance(finding.get(key), str) and finding[key].strip():
             return finding[key]
-    return "ez-appsec-finding"
+    return "sourcebastion-finding"
 
 
 def text_of(finding):
@@ -79,7 +79,7 @@ def text_of(finding):
         value = finding.get(key)
         if isinstance(value, str) and value.strip():
             return value
-    return "ez-appsec finding"
+    return "SourceBastion finding"
 
 
 def location_of(finding):
@@ -204,8 +204,8 @@ document = {
         {
             "tool": {
                 "driver": {
-                    "name": "ez-appsec",
-                    "informationUri": "https://github.com/ez-appsec/ez-appsec",
+                    "name": "SourceBastion",
+                    "informationUri": "https://github.com/sourcebastion/sourcebastion-scanner",
                     "rules": [rules[rule_id] for rule_id in order],
                 }
             },
@@ -216,4 +216,4 @@ document = {
 with open(destination, "w", encoding="utf-8") as handle:
     json.dump(document, handle, indent=2)
     handle.write("\n")
-print(f"ez-appsec: wrote {destination} ({len(results)} findings)")
+print(f"SourceBastion: wrote {destination} ({len(results)} findings)")

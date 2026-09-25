@@ -1,9 +1,9 @@
-name: ez-appsec scan
+name: SourceBastion scan
 description: >-
   Scan the repository and gate the pipeline. No account, no configuration, no
   secrets. Findings appear as annotations on the diff, as a SARIF artifact on
   the run, and -- where code scanning is enabled -- as code-scanning alerts.
-author: ez-appsec
+author: SourceBastion
 
 branding:
   icon: shield
@@ -16,7 +16,7 @@ inputs:
       pin a digest too -- a floating security scanner is a supply-chain
       exposure, not a convenience.
     required: false
-    default: ghcr.io/ez-appsec/ez-appsec@sha256:89d34f68839bfc4346d92d4e5c4103c528d643af9cd45c21019524ce8d175e62
+    default: ghcr.io/sourcebastion/sourcebastion-scanner@sha256:65a849b6acd95acfd904a7a22fae406bf0195a456616e0ef169d30042ca69f2f
   fail-on-severity:
     description: >-
       Lowest severity that fails the build: critical, high, medium, low, or
@@ -24,10 +24,17 @@ inputs:
       the gate.
     required: false
     default: high
+  policy-gate-mode:
+    description: >-
+      legacy keeps the existing local severity gate. hosted-v2 requires a
+      complete, current-head scan-gate.v2 verdict from the SourceBastion GitHub App and
+      fails closed on missing credentials, fork secrets, or platform errors.
+    required: false
+    default: legacy
   api-key:
     description: >-
       Optional. Absent (the default) the scan is keyless: nothing is sent to
-      ez-appsec, provably. Present, the same scan is also reported to the
+      SourceBastion, provably. Present, the same scan is also reported to the
       platform — that is the entire difference (M030 S05). Pass a secret.
     required: false
     default: ""
@@ -45,9 +52,10 @@ inputs:
     default: ""
   ingest-url:
     description: >-
-      Platform base URL the scan is reported to, when api-key is set.
+      Platform base URL the scan is reported to. Required when api-key is set
+      until the production SourceBastion API host is available.
     required: false
-    default: https://api.ez-appsec.com
+    default: ""
   strict-upload:
     description: >-
       "true" makes a failed platform upload fail the build. Default false:
@@ -71,29 +79,51 @@ runs:
       env:
         # Inputs are data, not shell source. Keeping the expression out of the
         # script prevents a caller-controlled quote from becoming a command.
-        EZ_APPSEC_IMAGE: ${{ inputs.image }}
+        SOURCEBASTION_IMAGE: ${{ inputs.image }}
+        SOURCEBASTION_GATE_MODE: ${{ inputs.policy-gate-mode }}
       run: |
         set -euo pipefail
-        results_dir="$(mktemp -d "${RUNNER_TEMP:?}/ez-appsec-results.XXXXXX")"
+        results_dir="$(mktemp -d "${RUNNER_TEMP:?}/sourcebastion-results.XXXXXX")"
         printf 'results_dir=%s\n' "$results_dir" >> "$GITHUB_OUTPUT"
 
         if [ "$(id -u)" -eq 0 ]; then
-          echo "::error::ez-appsec refuses to override the scanner's non-root user with root. Run the self-hosted runner as an unprivileged account."
+          echo "::error::SourceBastion refuses to override the scanner's non-root user with root. Run the self-hosted runner as an unprivileged account."
           exit 2
         fi
-        if [[ ! "$EZ_APPSEC_IMAGE" =~ ^[A-Za-z0-9][^[:space:]@]*@sha256:[0-9a-f]{64}$ ]]; then
-          echo "::error::ez-appsec image must be an explicit sha256 digest reference"
+        if [[ "$SOURCEBASTION_GATE_MODE" != "legacy" && "$SOURCEBASTION_GATE_MODE" != "hosted-v2" ]]; then
+          echo "::error::SourceBastion policy-gate-mode must be legacy or hosted-v2"
           exit 2
         fi
+        if [[ ! "$SOURCEBASTION_IMAGE" =~ ^[A-Za-z0-9][^[:space:]@]*@sha256:[0-9a-f]{64}$ ]]; then
+          echo "::error::SourceBastion image must be an explicit sha256 digest reference"
+          exit 2
+        fi
+
+        # Grype needs a current vulnerability database. Fetch it without a
+        # repository mount or platform credentials, then keep the scan itself
+        # network-isolated. A missing database is a scan error, not a pass.
+        mkdir -m 700 "$results_dir/grype-db"
+        docker run --rm \
+          --user "$(id -u):$(id -g)" \
+          --env HOME=/tmp \
+          --env GRYPE_DB_CACHE_DIR=/out/grype-db \
+          --volume "$results_dir:/out" \
+          --entrypoint grype \
+          "$SOURCEBASTION_IMAGE" db update
 
         docker run --rm \
           --user "$(id -u):$(id -g)" \
           --env HOME=/tmp \
+          --env SEMGREP_ENABLE_VERSION_CHECK=0 \
+          --env SEMGREP_SEND_METRICS=off \
+          --env GRYPE_DB_CACHE_DIR=/out/grype-db \
+          --env GRYPE_DB_AUTO_UPDATE=false \
+          --env GRYPE_DB_REQUIRE_UPDATE_CHECK=false \
           --network none \
           --volume "$GITHUB_WORKSPACE:/scan:ro" \
           --volume "$results_dir:/out" \
           --workdir /scan \
-          "$EZ_APPSEC_IMAGE" \
+          "$SOURCEBASTION_IMAGE" \
           scan . --output /out/results.json --severity all
 
     # SARIF next to the native report, from the same scan -- never a second
@@ -106,12 +136,12 @@ runs:
       if: always() && steps.scan.outputs.results_dir != ''
       shell: bash
       env:
-        EZ_APPSEC_ACTION_PATH: ${{ github.action_path }}
-        EZ_APPSEC_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
+        SOURCEBASTION_ACTION_PATH: ${{ github.action_path }}
+        SOURCEBASTION_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
       run: >-
-        python3 "$EZ_APPSEC_ACTION_PATH/scripts/sarif.py"
-        "$EZ_APPSEC_RESULTS_DIR/results.json"
-        "$EZ_APPSEC_RESULTS_DIR/results.sarif"
+        python3 "$SOURCEBASTION_ACTION_PATH/scripts/sarif.py"
+        "$SOURCEBASTION_RESULTS_DIR/results.json"
+        "$SOURCEBASTION_RESULTS_DIR/results.sarif"
 
     # Findings inline on the diff, free tier included (M030 S02): workflow
     # commands, no account, no App token, no platform contact.
@@ -120,11 +150,11 @@ runs:
       if: always() && steps.scan.outputs.results_dir != ''
       shell: bash
       env:
-        EZ_APPSEC_ACTION_PATH: ${{ github.action_path }}
-        EZ_APPSEC_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
+        SOURCEBASTION_ACTION_PATH: ${{ github.action_path }}
+        SOURCEBASTION_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
       run: >-
-        python3 "$EZ_APPSEC_ACTION_PATH/scripts/annotate.py"
-        "$EZ_APPSEC_RESULTS_DIR/results.json"
+        python3 "$SOURCEBASTION_ACTION_PATH/scripts/annotate.py"
+        "$SOURCEBASTION_RESULTS_DIR/results.json"
 
     # The runner's filesystem does not outlive the job. Without this upload
     # the free tier's deliverable is deleted with the runner.
@@ -132,7 +162,7 @@ runs:
       if: always() && steps.scan.outputs.results_dir != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
-        name: ez-appsec-scan
+        name: sourcebastion-scan
         path: |
           ${{ steps.scan.outputs.results_dir }}/results.json
           ${{ steps.scan.outputs.results_dir }}/results.sarif
@@ -152,48 +182,55 @@ runs:
       uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
       with:
         sarif_file: ${{ steps.scan.outputs.results_dir }}/results.sarif
-        category: ez-appsec
+        category: sourcebastion
 
     - name: Explain a code-scanning upload that did not happen
       if: always() && steps.codescan.outcome == 'failure'
       shell: bash
       run: |
-        echo "::notice::ez-appsec: the code-scanning upload was not completed. The scan, its annotations and the 'ez-appsec-scan' artifact are unaffected."
-        echo "::notice::ez-appsec: the usual causes: the job's permissions do not include 'security-events: write', or code scanning is not enabled for this repository."
-        echo "::notice::ez-appsec: neither is required on the free tier -- annotations and the artifact remain available."
+        echo "::notice::SourceBastion: the code-scanning upload was not completed. The scan, its annotations and the 'sourcebastion-scan' artifact are unaffected."
+        echo "::notice::SourceBastion: the usual causes: the job's permissions do not include 'security-events: write', or code scanning is not enabled for this repository."
+        echo "::notice::SourceBastion: neither is required on the free tier -- annotations and the artifact remain available."
 
-    # Managed mode (M030 S05): the same scan, also posted to the platform.
+    # Managed mode (M030 S05): upload in legacy mode; hosted-v2 reads the
+    # independently trusted GitHub App policy decision without uploading its
+    # CI report into the App's findings snapshot.
     # Gated on the key itself — no key, no step, no request (provable from
     # this file and from upload.py's first guard). Non-fatal by default:
     # a platform incident must not become an outage in every customer's
     # pipeline; policy rejection stays fatal and is decided by upload.py.
-    - name: Report findings to ez-appsec (managed mode)
+    - name: Report findings or verify SourceBastion gate
       id: upload
-      if: inputs.api-key != ''
+      if: inputs.api-key != '' || inputs.policy-gate-mode == 'hosted-v2'
       shell: bash
       env:
-        EZ_APPSEC_API_KEY: ${{ inputs.api-key }}
+        SOURCEBASTION_API_KEY: ${{ inputs.api-key }}
         # Read the provider's own signal, not the absent credential: a fork
         # PR cannot reach secrets and skips the upload honestly (M027 S09).
-        EZ_APPSEC_FORK_PR: ${{ github.event.pull_request.head.repo.fork || false }}
-        EZ_APPSEC_STRICT_UPLOAD: ${{ inputs.strict-upload }}
+        SOURCEBASTION_FORK_PR: ${{ github.event.pull_request.head.repo.fork || false }}
+        SOURCEBASTION_STRICT_UPLOAD: ${{ inputs.strict-upload }}
+        SOURCEBASTION_POLICY_GATE_MODE: ${{ inputs.policy-gate-mode }}
         # Inputs cross through env, never through `run`: expressions embedded
         # in run are substituted before bash parses the script, and an input
         # can carry quotes and shell metacharacters.
-        EZ_APPSEC_INGEST_URL: ${{ inputs.ingest-url }}
-        EZ_APPSEC_CHECK_ID: ${{ inputs.check-id }}
-        EZ_APPSEC_REPO_KEY: ${{ inputs.repo-key }}
-        EZ_APPSEC_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
+        SOURCEBASTION_INGEST_URL: ${{ inputs.ingest-url }}
+        SOURCEBASTION_CHECK_ID: ${{ inputs.check-id }}
+        SOURCEBASTION_REPO_KEY: ${{ inputs.repo-key }}
+        SOURCEBASTION_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
         COMMIT_SHA: ${{ github.sha }}
         REF: ${{ github.ref }}
+        # pull_request workflows normally run on a synthetic merge ref. The
+        # GitHub App independently gates the immutable PR head instead.
+        SOURCEBASTION_GATE_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        SOURCEBASTION_GATE_REF: ${{ github.event.pull_request.number && format('refs/pull/{0}/head', github.event.pull_request.number) || github.ref }}
         CI_RUN_ID: ${{ github.run_id }}
         CI_RUN_SEQUENCE: ${{ github.run_number }}
         DELIVERY_MODE: github_ci
         PROVIDER_TRIGGER: ${{ github.event_name }}
       run: >-
         python3 "${{ github.action_path }}/scripts/upload.py"
-        "$EZ_APPSEC_RESULTS_DIR/results.json" "$EZ_APPSEC_INGEST_URL"
-        "$EZ_APPSEC_CHECK_ID" "$EZ_APPSEC_REPO_KEY"
+        "$SOURCEBASTION_RESULTS_DIR/results.json" "$SOURCEBASTION_INGEST_URL"
+        "$SOURCEBASTION_CHECK_ID" "$SOURCEBASTION_REPO_KEY"
 
     # The gate runs last, only after a completed scan, and its exit code is
     # the job's verdict: 1 = policy violation, 2 = unevaluable output. When
@@ -201,13 +238,13 @@ runs:
     # re-failing on a report that cannot exist would bury it.
     - name: Enforce the policy gate
       id: gate
-      if: always() && steps.scan.outcome == 'success'
+      if: always() && steps.scan.outcome == 'success' && inputs.policy-gate-mode == 'legacy'
       shell: bash
       env:
-        EZ_APPSEC_ACTION_PATH: ${{ github.action_path }}
-        EZ_APPSEC_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
-        EZ_APPSEC_FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+        SOURCEBASTION_ACTION_PATH: ${{ github.action_path }}
+        SOURCEBASTION_RESULTS_DIR: ${{ steps.scan.outputs.results_dir }}
+        SOURCEBASTION_FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
       run: >-
-        python3 "$EZ_APPSEC_ACTION_PATH/scripts/gate.py"
-        "$EZ_APPSEC_RESULTS_DIR/results.json"
-        "$EZ_APPSEC_FAIL_ON_SEVERITY"
+        python3 "$SOURCEBASTION_ACTION_PATH/scripts/gate.py"
+        "$SOURCEBASTION_RESULTS_DIR/results.json"
+        "$SOURCEBASTION_FAIL_ON_SEVERITY"
