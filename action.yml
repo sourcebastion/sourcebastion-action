@@ -130,7 +130,7 @@ runs:
     # the free tier's deliverable is deleted with the runner.
     - name: Upload scan output as a workflow artifact
       if: always() && steps.scan.outputs.results_dir != ''
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: ez-appsec-scan
         path: |
@@ -149,7 +149,7 @@ runs:
       id: codescan
       if: always() && steps.scan.outputs.results_dir != ''
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+      uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
       with:
         sarif_file: ${{ steps.scan.outputs.results_dir }}/results.sarif
         category: ez-appsec
