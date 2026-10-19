@@ -168,3 +168,11 @@ def test_advisory_preparation_and_offline_scan_are_separate():
     assert "GRYPE_DB_AUTO_UPDATE=false" in scan
     assert "GRYPE_DB_REQUIRE_UPDATE_CHECK=false" in scan
     assert "SEMGREP_SEND_METRICS=off" in scan
+
+
+def test_report_filter_is_independent_of_policy_threshold():
+    step = BY_NAME["Scan the repository"]
+    assert ACTION["inputs"]["minimum-severity"]["default"] == "all"
+    assert step["env"]["EZ_APPSEC_MINIMUM_SEVERITY"] == "${{ inputs.minimum-severity }}"
+    assert '--severity "$EZ_APPSEC_MINIMUM_SEVERITY"' in step["run"]
+    assert "Invalid minimum-severity" in step["run"]

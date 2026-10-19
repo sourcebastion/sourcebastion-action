@@ -88,6 +88,7 @@ optional upload fails, everything the free tier promises still happens.
 | Input | Default | Notes |
 | --- | --- | --- |
 | `image` | digest-pinned `ghcr.io/ez-appsec/ez-appsec@sha256:…` | Override only with another digest-pinned reference. The Action rejects tags and other floating references. |
+| `minimum-severity` | `all` | Lowest severity retained in reports; independent of the failure threshold. |
 | `fail-on-severity` | `high` | Lowest severity that fails the build: `critical`, `high`, `medium`, `low`, `none`. |
 | `api-key` | *(empty — keyless)* | Set it and the same scan is also reported to the platform. Pass a secret: `api-key: ${{ secrets.EZ_APPSEC_API_KEY }}`. |
 | `check-id` | *(empty)* | Required with `api-key`; minted with the key from the Integrate-with-CI flow. |
