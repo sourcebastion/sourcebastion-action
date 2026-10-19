@@ -59,6 +59,11 @@ a root container. The repository is mounted read-only, the report is written
 to the runner's temporary directory, and the scanner runs without network
 access.
 
+Before the offline scan, a separate container downloads Grype's advisory database.
+It has no repository mount or platform credential. The scan mounts that database
+and disables database updates, version checks and telemetry. A failed database
+preparation fails the scan.
+
 ## Permissions
 
 `action.yml` cannot declare permissions for your workflow, so the sample
