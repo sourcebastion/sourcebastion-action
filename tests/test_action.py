@@ -155,3 +155,24 @@ def test_documentation_recommends_verifiable_usage():
     assert "gh attestation verify" in readme
     assert "full 40-character commit SHA" in prose
     assert "API-COMPATIBILITY.md" in readme
+
+
+def test_advisory_preparation_and_offline_scan_are_separate():
+    script = BY_NAME["Scan the repository"]["run"]
+    prepare, scan = script.split('"$EZ_APPSEC_IMAGE" db update', 1)
+    assert '"$GITHUB_WORKSPACE:/scan:ro"' not in prepare
+    assert "--entrypoint grype" in prepare
+    assert "API_KEY" not in prepare
+    assert "--network none" in scan
+    assert '"$GITHUB_WORKSPACE:/scan:ro"' in scan
+    assert "GRYPE_DB_AUTO_UPDATE=false" in scan
+    assert "GRYPE_DB_REQUIRE_UPDATE_CHECK=false" in scan
+    assert "SEMGREP_SEND_METRICS=off" in scan
+
+
+def test_report_filter_is_independent_of_policy_threshold():
+    step = BY_NAME["Scan the repository"]
+    assert ACTION["inputs"]["minimum-severity"]["default"] == "all"
+    assert step["env"]["EZ_APPSEC_MINIMUM_SEVERITY"] == "${{ inputs.minimum-severity }}"
+    assert '--severity "$EZ_APPSEC_MINIMUM_SEVERITY"' in step["run"]
+    assert "Invalid minimum-severity" in step["run"]

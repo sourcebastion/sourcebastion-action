@@ -16,7 +16,11 @@ inputs:
       pin a digest too -- a floating security scanner is a supply-chain
       exposure, not a convenience.
     required: false
-    default: ghcr.io/ez-appsec/ez-appsec@sha256:89d34f68839bfc4346d92d4e5c4103c528d643af9cd45c21019524ce8d175e62
+    default: ghcr.io/sourcebastion/sourcebastion-scanner@sha256:3124ee82b568144aecda44604f663f20b1694b8a2b78945881ecd4d747c713c1
+  minimum-severity:
+    description: Minimum severity retained in scan results (all, critical, high, medium, low, info).
+    required: false
+    default: all
   fail-on-severity:
     description: >-
       Lowest severity that fails the build: critical, high, medium, low, or
@@ -72,8 +76,13 @@ runs:
         # Inputs are data, not shell source. Keeping the expression out of the
         # script prevents a caller-controlled quote from becoming a command.
         EZ_APPSEC_IMAGE: ${{ inputs.image }}
+        EZ_APPSEC_MINIMUM_SEVERITY: ${{ inputs.minimum-severity }}
       run: |
         set -euo pipefail
+        case "$EZ_APPSEC_MINIMUM_SEVERITY" in
+          all|critical|high|medium|low|info) ;;
+          *) echo "::error::Invalid minimum-severity"; exit 2 ;;
+        esac
         results_dir="$(mktemp -d "${RUNNER_TEMP:?}/ez-appsec-results.XXXXXX")"
         printf 'results_dir=%s\n' "$results_dir" >> "$GITHUB_OUTPUT"
 
@@ -86,15 +95,30 @@ runs:
           exit 2
         fi
 
+        # Prepare advisory data without repository access or platform credentials.
+        mkdir -m 700 "$results_dir/grype-db"
         docker run --rm \
           --user "$(id -u):$(id -g)" \
           --env HOME=/tmp \
+          --env GRYPE_DB_CACHE_DIR=/out/grype-db \
+          --volume "$results_dir:/out" \
+          --entrypoint grype \
+          "$EZ_APPSEC_IMAGE" db update
+
+        docker run --rm \
+          --user "$(id -u):$(id -g)" \
+          --env HOME=/tmp \
+          --env SEMGREP_ENABLE_VERSION_CHECK=0 \
+          --env SEMGREP_SEND_METRICS=off \
+          --env GRYPE_DB_CACHE_DIR=/out/grype-db \
+          --env GRYPE_DB_AUTO_UPDATE=false \
+          --env GRYPE_DB_REQUIRE_UPDATE_CHECK=false \
           --network none \
           --volume "$GITHUB_WORKSPACE:/scan:ro" \
           --volume "$results_dir:/out" \
           --workdir /scan \
           "$EZ_APPSEC_IMAGE" \
-          scan . --output /out/results.json --severity all
+          scan . --output /out/results.json --severity "$EZ_APPSEC_MINIMUM_SEVERITY"
 
     # SARIF next to the native report, from the same scan -- never a second
     # scan whose verdict could disagree (M030 S01). The script is the same
@@ -130,7 +154,7 @@ runs:
     # the free tier's deliverable is deleted with the runner.
     - name: Upload scan output as a workflow artifact
       if: always() && steps.scan.outputs.results_dir != ''
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: ez-appsec-scan
         path: |
@@ -149,7 +173,7 @@ runs:
       id: codescan
       if: always() && steps.scan.outputs.results_dir != ''
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+      uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
       with:
         sarif_file: ${{ steps.scan.outputs.results_dir }}/results.sarif
         category: ez-appsec
